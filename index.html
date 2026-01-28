@@ -7,31 +7,31 @@
   <style>
     html, body { height: 100%; margin: 0; background: #ffffff; overflow: hidden; }
     canvas { display:block; width: 100vw; height: 100vh; touch-action: none; }
-    .hud {
+
+    .hud{
       position: fixed; left: 12px; top: 10px; right: 12px;
-      color: #1b2433; font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color:#1b2433; font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
       text-shadow: 0 1px 0 rgba(255,255,255,.9);
-      display:flex; align-items:flex-start; justify-content:space-between; gap: 10px;
+      display:flex; justify-content:space-between; gap: 10px;
       pointer-events:none;
     }
-    .hud .left { display:flex; flex-direction:column; gap:6px; }
-    .badge {
+    .hud .left{ display:flex; flex-direction:column; gap:6px; }
+    .badge{
       display:inline-block; padding: 6px 10px; border-radius: 999px;
       background: rgba(255,255,255,.75); border: 1px solid rgba(0,0,0,.08);
       backdrop-filter: blur(6px);
     }
-    .toast {
-      position: fixed; left: 50%; top: 16%;
-      transform: translateX(-50%);
+    .toast{
+      position: fixed; left: 50%; top: 16%; transform: translateX(-50%);
       padding: 10px 14px; border-radius: 14px;
       background: rgba(0,0,0,.08); border: 1px solid rgba(0,0,0,.10);
-      color: #111; font: 16px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color:#111; font: 16px system-ui, -apple-system, Segoe UI, Roboto, Arial;
       pointer-events:none;
       opacity: 0; transition: opacity .18s ease;
       white-space: nowrap;
     }
-    .toast.show { opacity: 1; }
-    .btn {
+    .toast.show{ opacity: 1; }
+    .btn{
       pointer-events:auto;
       border: 1px solid rgba(0,0,0,.10);
       background: rgba(255,255,255,.85);
@@ -40,8 +40,8 @@
       font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial;
       cursor: pointer;
     }
-    .btn:active { transform: translateY(1px); }
-    .footerTip {
+    .btn:active{ transform: translateY(1px); }
+    .footerTip{
       position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
       color: rgba(10,20,35,.92);
       font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial;
@@ -50,7 +50,7 @@
       border-radius: 999px;
       padding: 8px 12px;
       pointer-events:none;
-      text-align: center;
+      text-align:center;
       max-width: calc(100vw - 24px);
     }
   </style>
@@ -61,6 +61,7 @@
       <div class="badge" id="scoreBadge">Score: 0</div>
       <div class="badge" id="comboBadge">Combo: x1</div>
       <div class="badge" id="speedBadge">Speed: 0.0</div>
+      <div class="badge" id="camBadge">X: 0</div>
     </div>
     <button class="btn" id="restartBtn">Restart</button>
   </div>
@@ -68,870 +69,837 @@
   <div class="footerTip">Drag to steer. You only move downhill when your board points downhill. Mogul swipe up = backflip, down = frontflip. Rails grind. Halfpipes pop.</div>
   <canvas id="c"></canvas>
 
-  <script>
-    const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d", { alpha: false });
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
 
-    const ui = {
-      score: document.getElementById("scoreBadge"),
-      combo: document.getElementById("comboBadge"),
-      speed: document.getElementById("speedBadge"),
-      toast: document.getElementById("toast"),
-      restart: document.getElementById("restartBtn"),
-    };
+  const ui = {
+    score: document.getElementById("scoreBadge"),
+    combo: document.getElementById("comboBadge"),
+    speed: document.getElementById("speedBadge"),
+    cam: document.getElementById("camBadge"),
+    toast: document.getElementById("toast"),
+    restart: document.getElementById("restartBtn"),
+  };
 
-    function fitCanvas() {
-      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      canvas.width = Math.floor(window.innerWidth * dpr);
-      canvas.height = Math.floor(window.innerHeight * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = () => window.innerWidth;
+  const H = () => window.innerHeight;
+
+  function fitCanvas() {
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.floor(W() * dpr);
+    canvas.height = Math.floor(H() * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener("resize", fitCanvas);
+  fitCanvas();
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
+
+  function showToast(text) {
+    ui.toast.textContent = text;
+    ui.toast.classList.add("show");
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 650);
+  }
+
+  // Input
+  const input = {
+    active: false,
+    x: W() * 0.5,
+    y: H() * 0.7,
+    swipeStartX: 0,
+    swipeStartY: 0,
+    swipeStartT: 0,
+    swipeDX: 0,
+    swipeDY: 0,
+    swipeTime: 0,
+    justSwiped: false,
+  };
+
+  function pointerPos(e) {
+    if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if (e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    const p = pointerPos(e);
+    input.active = true;
+    input.x = p.x; input.y = p.y;
+    input.swipeStartX = p.x; input.swipeStartY = p.y;
+    input.swipeStartT = performance.now();
+    input.justSwiped = false;
+  }
+  function onPointerMove(e) {
+    if (!input.active) return;
+    e.preventDefault();
+    const p = pointerPos(e);
+    input.x = p.x; input.y = p.y;
+  }
+  function onPointerUp(e) {
+    if (!input.active) return;
+    e.preventDefault();
+    const p = pointerPos(e);
+    input.active = false;
+
+    const tNow = performance.now();
+    const dt = Math.max(1, tNow - input.swipeStartT);
+    input.swipeDX = p.x - input.swipeStartX;
+    input.swipeDY = p.y - input.swipeStartY;
+    input.swipeTime = dt;
+    input.justSwiped = true;
+  }
+
+  canvas.addEventListener("touchstart", onPointerDown, { passive: false });
+  canvas.addEventListener("touchmove", onPointerMove, { passive: false });
+  canvas.addEventListener("touchend", onPointerUp, { passive: false });
+  canvas.addEventListener("mousedown", onPointerDown);
+  window.addEventListener("mousemove", onPointerMove);
+  window.addEventListener("mouseup", onPointerUp);
+
+  const keys = {};
+  window.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
+  window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // Camera (the secret sauce)
+  const camera = {
+    x: 0,         // world units
+    y: 0,         // we keep your existing scroll via camera.y
+    follow: 0.12, // smoothing
+  };
+
+  // Game state
+  const game = {
+    running: true,
+    time: 0,
+    speed: 220,
+    speedMul: 1,
+    score: 0,
+    combo: 1,
+    bestCombo: 1,
+    state: "ride",
+    crashT: 0,
+
+    grind: { active:false, until:0, railId:null, t:0 },
+    trick: { active:false, until:0, mogulId:null, required:null, resolved:false },
+  };
+
+  // Player lives in world space (wx, wy). We keep wy fixed (screen anchor),
+  // and the camera handles the endless mountain.
+  const player = {
+    wx: 0,
+    wy: H() * 0.70,   // screen anchor (not world)
+    r: 14,
+
+    vx: 0,
+    spin: 0,
+    spinDir: 0,
+    airborne: 0,
+
+    dirX: 0,
+    dirY: 1,
+    carve: 0,
+    moveFactor: 0,
+  };
+
+  // World objects are in world coordinates: (x,y)
+  let nextId = 1;
+  const moguls = [];
+  const rocks = [];
+  const trees = [];
+  const rails = [];
+  const halfpipes = [];
+  const snowFX = [];
+
+  // Convert world to screen
+  function sx(worldX) { return worldX - camera.x + W() * 0.5; }
+  function sy(worldY) { return worldY + camera.y; } // camera.y works like your old scrollY
+
+  // Spawn helpers (spawn around current camera x center)
+  function spawnMogul(worldY) {
+    moguls.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(18, 26), used:false });
+  }
+  function spawnRock(worldY) {
+    rocks.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(14, 22) });
+  }
+  function spawnTree(worldY) {
+    trees.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(16, 22) });
+  }
+  function spawnRail(worldY) {
+    const len = rand(120, 200);
+    const angle = rand(-0.25, 0.25);
+    rails.push({ id: nextId++, x: camera.x + rand(-W()*0.45, W()*0.45), y: worldY, len, angle, usedUntil: 0 });
+  }
+  function spawnHalfpipe(worldY) {
+    const w = rand(160, 240);
+    const h = rand(60, 90);
+    halfpipes.push({ id: nextId++, x: camera.x + rand(-W()*0.40, W()*0.40), y: worldY, w, h, usedUntil: 0 });
+  }
+
+  function addPowder(screenX, screenY, n = 10) {
+    for (let i = 0; i < n; i++) {
+      snowFX.push({
+        x: screenX + rand(-8, 8),
+        y: screenY + rand(-8, 8),
+        vx: rand(-40, 40),
+        vy: rand(-80, -20),
+        life: rand(0.25, 0.45),
+        t: 0,
+      });
     }
-    window.addEventListener("resize", fitCanvas);
-    fitCanvas();
+  }
 
-    const W = () => window.innerWidth;
-    const H = () => window.innerHeight;
+  // Distance to segment (screen coords)
+  function distPointSeg(px, py, x1, y1, x2, y2) {
+    const vx = x2 - x1, vy = y2 - y1;
+    const wx = px - x1, wy = py - y1;
+    const c1 = vx * wx + vy * wy;
+    if (c1 <= 0) return Math.hypot(px - x1, py - y1);
+    const c2 = vx * vx + vy * vy;
+    if (c2 <= c1) return Math.hypot(px - x2, py - y2);
+    const t = c1 / c2;
+    const bx = x1 + t * vx, by = y1 + t * vy;
+    return Math.hypot(px - bx, py - by);
+  }
 
-    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-    function rand(a, b) { return a + Math.random() * (b - a); }
-    function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
+  function beginTrickWindow(mogulId) {
+    game.trick.active = true;
+    game.trick.resolved = false;
+    game.trick.mogulId = mogulId;
+    game.trick.required = Math.random() < 0.5 ? "up" : "down";
+    game.trick.until = performance.now() + 450;
+    showToast(game.trick.required === "up" ? "Swipe up - backflip" : "Swipe down - frontflip");
+  }
 
-    function showToast(text) {
-      ui.toast.textContent = text;
-      ui.toast.classList.add("show");
-      clearTimeout(showToast._t);
-      showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 650);
+  function handleSwipe(dx, dy, dtMs) {
+    if (!game.trick.active || game.trick.resolved) return;
+
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    const dist = Math.hypot(dx, dy);
+    if (dist < 40 || dtMs > 500) return;
+    if (absY < absX * 1.2) return;
+
+    const dir = dy < 0 ? "up" : "down";
+    const needed = game.trick.required;
+
+    if (dir === needed) {
+      game.trick.resolved = true;
+      game.trick.active = false;
+
+      const base = 100;
+      const bonus = (game.combo - 1) * 35;
+      game.score += base + bonus;
+      game.combo = Math.min(20, game.combo + 1);
+      game.bestCombo = Math.max(game.bestCombo, game.combo);
+
+      player.airborne = 0.55;
+      player.spinDir = (dir === "up") ? 1 : -1;
+
+      addPowder(W()*0.5, player.wy + 10, 18);
+      showToast(dir === "up" ? "Backflip" : "Frontflip");
+    } else {
+      crash("Wrong flip");
+    }
+  }
+
+  function crash(reason) {
+    if (game.state === "crash") return;
+    game.state = "crash";
+    game.crashT = 0;
+    game.trick.active = false;
+    game.trick.resolved = true;
+    game.grind.active = false;
+    game.combo = 1;
+
+    addPowder(W()*0.5, player.wy, 28);
+
+    const msg =
+      reason === "Rock" ? "Rocked" :
+      reason === "Tree" ? "Tree'd" :
+      reason === "Wrong flip" ? "Wrong flip" :
+      reason === "No swipe" ? "No swipe" :
+      "Wipeout";
+    showToast(msg);
+  }
+
+  function startGrind(rail) {
+    game.grind.active = true;
+    game.grind.railId = rail.id;
+    game.grind.until = performance.now() + 700;
+    game.grind.t = 0;
+    rail.usedUntil = performance.now() + 1200;
+    showToast("Grind");
+  }
+
+  function triggerHalfpipe(pipe) {
+    pipe.usedUntil = performance.now() + 1400;
+    player.airborne = Math.max(player.airborne, 0.75);
+    addPowder(W()*0.5, player.wy + 10, 22);
+    game.score += 80 + (game.combo - 1) * 10;
+    showToast("Halfpipe pop");
+  }
+
+  function reset() {
+    game.running = true;
+    game.time = 0;
+    camera.x = 0;
+    camera.y = 0;
+
+    game.speedMul = 1;
+    game.score = 0;
+    game.combo = 1;
+    game.bestCombo = 1;
+    game.state = "ride";
+    game.crashT = 0;
+    game.trick.active = false;
+    game.trick.resolved = false;
+    game.grind.active = false;
+    game.grind.t = 0;
+
+    player.wx = 0;
+    player.wy = H() * 0.70;
+    player.vx = 0;
+    player.spin = 0;
+    player.spinDir = 0;
+    player.airborne = 0;
+    player.dirX = 0;
+    player.dirY = 1;
+    player.carve = 0;
+    player.moveFactor = 0;
+
+    moguls.length = 0;
+    rocks.length = 0;
+    trees.length = 0;
+    rails.length = 0;
+    halfpipes.length = 0;
+    snowFX.length = 0;
+
+    // Seed world ahead (worldY is negative "up the hill", and increases as you move down)
+    for (let i = 0; i < 10; i++) spawnMogul(-i * 240 - 200);
+    for (let i = 0; i < 4; i++) spawnRock(-i * 520 - 450);
+    for (let i = 0; i < 10; i++) spawnTree(-i * 240 - 250);
+    for (let i = 0; i < 6; i++) spawnRail(-i * 520 - 350);
+    for (let i = 0; i < 5; i++) spawnHalfpipe(-i * 680 - 600);
+
+    showToast("Endless mountain");
+  }
+
+  ui.restart.addEventListener("click", reset);
+  reset();
+
+  function update(dt) {
+    if (!game.running) return;
+    game.time += dt;
+
+    // target steer input is now a "desired screen X", but we convert it into world movement.
+    // The player is rendered at screen center, so "dragging left/right" effectively pushes camera.x.
+    let targetScreenX = input.x;
+    if (!input.active) {
+      targetScreenX = (W() * 0.5)
+        + (keys["arrowleft"] ? -220 : 0)
+        + (keys["arrowright"] ? 220 : 0);
     }
 
-    // Input
-    const input = {
-      active: false,
-      x: W() * 0.5,
-      y: H() * 0.7,
-      swipeDX: 0,
-      swipeDY: 0,
-      swipeTime: 0,
-      swipeStartX: 0,
-      swipeStartY: 0,
-      swipeStartT: 0,
-      justSwiped: false,
-    };
+    // How far from center is your finger? That becomes lateral intent.
+    const center = W() * 0.5;
+    const intent = clamp((targetScreenX - center) / (W() * 0.35), -1, 1);
 
-    function pointerPos(e) {
-      if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      if (e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
-      return { x: e.clientX, y: e.clientY };
+    // Convert intent into world lateral movement (player.wx) and thus camera.x.
+    // Small smoothing keeps it SkiFree-y.
+    const lateralSpeed = 320; // world units per second
+    player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
+    player.wx += player.vx * dt;
+
+    // Direction vector from intent + finger Y (for downhill gating)
+    let dirX = intent;
+    let dirY = 1;
+    if (input.active) {
+      // Use finger Y to allow "not pointing downhill" behavior
+      const dy = input.y - player.wy;
+      // If finger is above player, you are pointing uphill, reduce downhill
+      dirY = clamp(dy / 220, -1, 1);
+      // normalize-ish
+      const len = Math.hypot(dirX, dirY) || 1;
+      dirX /= len; dirY /= len;
+      // convert dirY to "downhill positive" like before
+      // finger below => positive dirY, finger above => negative
+      // We already did that via dy sign.
+    } else {
+      const len = Math.hypot(dirX, 1) || 1;
+      dirX /= len; dirY = 1 / len;
     }
+    player.dirX = dirX;
+    player.dirY = dirY;
 
-    function onPointerDown(e) {
-      e.preventDefault();
-      const p = pointerPos(e);
-      input.active = true;
-      input.x = p.x; input.y = p.y;
-      input.swipeStartX = p.x; input.swipeStartY = p.y;
-      input.swipeStartT = performance.now();
+    game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
+
+    // Downhill gating (only move camera.y when board points down)
+    const downhillAlign = player.dirY;
+    const THRESH = 0.25;
+    let moveFactor = 0;
+    if (downhillAlign > THRESH) {
+      moveFactor = (downhillAlign - THRESH) / (1 - THRESH);
+      moveFactor = moveFactor * moveFactor;
+    }
+    if (game.grind.active) moveFactor = Math.max(moveFactor, 0.85);
+    player.moveFactor = moveFactor;
+
+    // camera.y increases as you go down (like old scrollY)
+    const scrollSpeed = game.speed * game.speedMul * moveFactor;
+    camera.y += scrollSpeed * dt;
+
+    // Camera follows player.wx smoothly so mountain feels endless.
+    // This is the key: you drift in world space, camera follows, everything shifts.
+    camera.x += (player.wx - camera.x) * clamp(camera.follow + dt * 0.0, 0, 1);
+
+    // Smooth carve signal for sprite pose
+    const rawCarve = clamp(player.dirX / 0.9, -1, 1);
+    player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
+
+    // Swipes for tricks
+    if (input.justSwiped) {
+      handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
       input.justSwiped = false;
     }
-    function onPointerMove(e) {
-      if (!input.active) return;
-      e.preventDefault();
-      const p = pointerPos(e);
-      input.x = p.x; input.y = p.y;
+
+    // Maintain population ahead of camera
+    const topWorld = -camera.y - 140;
+    const bottomWorld = -camera.y + H() + 320;
+
+    while (moguls.length < 14) spawnMogul(topWorld - rand(140, 280));
+    while (rocks.length < 7) spawnRock(topWorld - rand(420, 720));
+    while (trees.length < 14) spawnTree(topWorld - rand(140, 320));
+    while (rails.length < 8) spawnRail(topWorld - rand(420, 820));
+    while (halfpipes.length < 6) spawnHalfpipe(topWorld - rand(520, 980));
+
+    function cull(arr) {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].y > bottomWorld + 900) arr.splice(i, 1);
+      }
     }
-    function onPointerUp(e) {
-      if (!input.active) return;
-      e.preventDefault();
-      const p = pointerPos(e);
-      input.active = false;
+    cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
 
-      const tNow = performance.now();
-      const dt = Math.max(1, tNow - input.swipeStartT);
-      input.swipeDX = p.x - input.swipeStartX;
-      input.swipeDY = p.y - input.swipeStartY;
-      input.swipeTime = dt;
-      input.justSwiped = true;
+    // Trick window timeout
+    if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) crash("No swipe");
+
+    // Grind scoring
+    if (game.grind.active) {
+      game.grind.t += dt;
+      game.score += 30 * dt * Math.max(1, game.combo * 0.6);
+      if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    canvas.addEventListener("touchstart", onPointerDown, { passive: false });
-    canvas.addEventListener("touchmove", onPointerMove, { passive: false });
-    canvas.addEventListener("touchend", onPointerUp, { passive: false });
-    canvas.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("mousemove", onPointerMove);
-    window.addEventListener("mouseup", onPointerUp);
+    // Collisions and interactions happen in screen space using sx, sy
+    if (game.state !== "crash") {
+      // Rocks
+      for (const rock of rocks) {
+        const rx = sx(rock.x);
+        const ry = sy(rock.y);
+        if (ry < -100 || ry > H() + 100) continue;
+        const rr = (player.r + rock.r) * 0.95;
+        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rock"); break; }
+      }
 
-    const keys = {};
-    window.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
-    window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+      // Trees
+      if (game.state !== "crash") {
+        for (const t of trees) {
+          const tx = sx(t.x);
+          const ty = sy(t.y);
+          if (ty < -120 || ty > H() + 120) continue;
+          const rr = (player.r + t.r) * 0.90;
+          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { crash("Tree"); break; }
+        }
+      }
 
-    // Game state
-    const game = {
-      running: true,
-      time: 0,
-      scrollY: 0,
-      speed: 220,
-      speedMul: 1,
-      score: 0,
-      combo: 1,
-      bestCombo: 1,
-      state: "ride",
-      crashT: 0,
+      // Moguls
+      if (game.state !== "crash") {
+        for (const m of moguls) {
+          const mx = sx(m.x);
+          const my = sy(m.y);
+          if (my < -120 || my > H() + 120) continue;
+          const rr = (player.r + m.r) * 0.95;
+          if (!m.used && dist2(W()*0.5, player.wy, mx, my) <= rr * rr) {
+            m.used = true;
+            beginTrickWindow(m.id);
+            addPowder(W()*0.5, player.wy + 8, 12);
+            break;
+          }
+        }
+      }
 
-      // rail grind
-      grind: { active:false, until:0, railId:null, t:0 },
+      // Rails (grind)
+      if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35) {
+        for (const r of rails) {
+          if (performance.now() < r.usedUntil) continue;
 
-      trick: { active:false, until:0, mogulId:null, required:null, resolved:false }
-    };
+          const cx = sx(r.x);
+          const cy = sy(r.y);
+          if (cy < -200 || cy > H() + 220) continue;
 
-    const player = {
-      x: W() * 0.5,
-      y: H() * 0.70,
-      r: 14,
-      vx: 0,
-      spin: 0,
-      spinDir: 0,
-      airborne: 0,
-      dirX: 0,
-      dirY: 1,
-      carve: 0,
-      moveFactor: 0,
-    };
+          const a = r.angle;
+          const dx = Math.sin(a) * r.len;
+          const dy = Math.cos(a) * r.len;
+          const x1 = cx - dx * 0.5;
+          const y1 = cy - dy * 0.5;
+          const x2 = cx + dx * 0.5;
+          const y2 = cy + dy * 0.5;
 
-    let nextId = 1;
+          const d = distPointSeg(W()*0.5, player.wy, x1, y1, x2, y2);
+          if (d < 14 && player.airborne <= 0.02) {
+            startGrind(r);
+            addPowder(W()*0.5, player.wy + 10, 14);
+            break;
+          }
+        }
+      }
 
-    // World objects (worldY increases "downhill"; screenY = worldY + scrollY)
-    const moguls = [];
-    const rocks = [];
-    const trees = [];
-    const rails = [];
-    const halfpipes = [];
-    const snowFX = [];
+      // Halfpipes (pop)
+      if (game.state !== "crash") {
+        for (const hp of halfpipes) {
+          if (performance.now() < hp.usedUntil) continue;
 
-    function reset() {
-      game.running = true;
-      game.time = 0;
-      game.scrollY = 0;
-      game.speedMul = 1;
-      game.score = 0;
-      game.combo = 1;
-      game.bestCombo = 1;
-      game.state = "ride";
-      game.crashT = 0;
-      game.trick.active = false;
-      game.trick.resolved = false;
-      game.grind.active = false;
-      game.grind.t = 0;
+          const hx = sx(hp.x);
+          const hy = sy(hp.y);
+          if (hy < -200 || hy > H() + 240) continue;
 
-      player.x = W() * 0.5;
-      player.y = H() * 0.70;
-      player.vx = 0;
+          const left = hx - hp.w * 0.5;
+          const right = hx + hp.w * 0.5;
+          const top = hy - hp.h;
+          const bottom = hy + hp.h * 0.6;
+
+          if (W()*0.5 > left && W()*0.5 < right && player.wy > top && player.wy < bottom) {
+            triggerHalfpipe(hp);
+            break;
+          }
+        }
+      }
+    }
+
+    // Airborne spin
+    if (player.airborne > 0) {
+      player.airborne = Math.max(0, player.airborne - dt);
+      player.spin += player.spinDir * dt * 10.5;
+    } else {
       player.spin = 0;
       player.spinDir = 0;
-      player.airborne = 0;
-      player.dirX = 0; player.dirY = 1;
-      player.carve = 0;
-      player.moveFactor = 0;
-
-      moguls.length = 0;
-      rocks.length = 0;
-      trees.length = 0;
-      rails.length = 0;
-      halfpipes.length = 0;
-      snowFX.length = 0;
-      input.justSwiped = false;
-
-      // Seed world
-      for (let i = 0; i < 10; i++) spawnMogul(-i * 240 - 200);
-      for (let i = 0; i < 4; i++) spawnRock(-i * 520 - 450);
-      for (let i = 0; i < 8; i++) spawnTree(-i * 260 - 250);
-      for (let i = 0; i < 5; i++) spawnRail(-i * 520 - 350);
-      for (let i = 0; i < 4; i++) spawnHalfpipe(-i * 680 - 600);
-
-      showToast("Fresh powder");
     }
 
-    ui.restart.addEventListener("click", reset);
-    reset();
-
-    function worldToScreenY(worldY) { return worldY + game.scrollY; }
-
-    function spawnMogul(worldY) {
-      moguls.push({ id: nextId++, x: rand(70, W() - 70), y: worldY, r: rand(18, 26), used:false });
-    }
-    function spawnRock(worldY) {
-      rocks.push({ id: nextId++, x: rand(70, W() - 70), y: worldY, r: rand(14, 22) });
-    }
-    function spawnTree(worldY) {
-      trees.push({ id: nextId++, x: rand(70, W() - 70), y: worldY, r: rand(16, 22) });
-    }
-    function spawnRail(worldY) {
-      const x = rand(90, W() - 90);
-      const len = rand(120, 200);
-      const angle = rand(-0.25, 0.25); // slight tilt
-      rails.push({ id: nextId++, x, y: worldY, len, angle, usedUntil: 0 });
-    }
-    function spawnHalfpipe(worldY) {
-      const x = rand(110, W() - 110);
-      const w = rand(160, 240);
-      const h = rand(60, 90);
-      halfpipes.push({ id: nextId++, x, y: worldY, w, h, usedUntil: 0 });
+    // Particles
+    for (let i = snowFX.length - 1; i >= 0; i--) {
+      const p = snowFX[i];
+      p.t += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 260 * dt;
+      if (p.t >= p.life) snowFX.splice(i, 1);
     }
 
-    function addPowder(x, y, n = 10) {
-      for (let i = 0; i < n; i++) {
-        snowFX.push({
-          x: x + rand(-8, 8),
-          y: y + rand(-8, 8),
-          vx: rand(-40, 40),
-          vy: rand(-80, -20),
-          life: rand(0.25, 0.45),
-          t: 0,
-        });
+    // Crash handling
+    if (game.state === "crash") {
+      game.crashT += dt;
+      if (game.crashT > 1.2) {
+        game.running = false;
+        showToast("Wipeout - tap Restart");
       }
     }
 
-    function beginTrickWindow(mogulId) {
-      game.trick.active = true;
-      game.trick.resolved = false;
-      game.trick.mogulId = mogulId;
-      game.trick.required = Math.random() < 0.5 ? "up" : "down";
-      game.trick.until = performance.now() + 450;
-      showToast(game.trick.required === "up" ? "Swipe up - backflip" : "Swipe down - frontflip");
+    ui.score.textContent = `Score: ${Math.floor(game.score)}`;
+    ui.combo.textContent = `Combo: x${game.combo}`;
+    ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor).toFixed(1)}`;
+    ui.cam.textContent = `X: ${Math.round(camera.x)}`;
+  }
+
+  // Sprite
+  function px(x, y, s, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x * s, y * s, s, s);
+  }
+
+  function drawSnowboarder8bit(crashed) {
+    const s = 2.3;
+    const hop = (player.airborne > 0) ? -6 : 0;
+
+    const OUT = "rgba(0,0,0,0.55)";
+    const HELM = crashed ? "rgba(255,120,150,0.95)" : "rgba(245,245,255,0.95)";
+    const FACE = "rgba(245,210,170,0.95)";
+    const JACKET = crashed ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
+    const PANTS = "rgba(60,90,140,0.95)";
+    const GLOVE = "rgba(230,230,240,0.9)";
+    const BOARD = "rgba(255,255,255,0.95)";
+    const BOARD2 = "rgba(0,0,0,0.22)";
+
+    const carve = player.carve;
+    const mv = player.moveFactor;
+    const absC = Math.abs(carve);
+
+    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
+    const boardAngleMag = targetMoving * mv;
+
+    // inverted yaw for the feel you liked
+    const boardYaw = -boardAngleMag * Math.sign(carve || 1);
+
+    // stance shift: left intent shifts right
+    const side = -Math.sign(carve || 1);
+    const stanceX = side * (2 + 4 * absC) * mv;
+    const stanceY = 0.5 * mv;
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+
+    ctx.translate(-8 * s, (-18 * s) + hop);
+    ctx.translate(stanceX * s, stanceY * s);
+
+    // shadow
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(4 * s, 22 * s, 8 * s, 3 * s);
+    ctx.restore();
+
+    // board
+    ctx.save();
+    ctx.translate(8 * s, 20 * s);
+    ctx.rotate(boardYaw);
+    ctx.translate(-8 * s, -20 * s);
+
+    for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
+    px(3, 19, s, OUT); px(12, 19, s, OUT);
+    for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
+    for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
+    px(3, 20, s, "rgba(255,70,90,0.85)");
+    px(12, 20, s, "rgba(90,180,255,0.85)");
+    ctx.restore();
+
+    // rider
+    px(6, 18, s, OUT); px(9, 18, s, OUT);
+    px(6, 17, s, PANTS); px(9, 17, s, PANTS);
+
+    px(6, 16, s, PANTS); px(7, 16, s, PANTS); px(8, 16, s, PANTS); px(9, 16, s, PANTS);
+    px(7, 15, s, PANTS); px(8, 15, s, PANTS);
+
+    px(6, 13, s, JACKET); px(7, 13, s, JACKET); px(8, 13, s, JACKET); px(9, 13, s, JACKET);
+    px(6, 14, s, JACKET); px(7, 14, s, JACKET); px(8, 14, s, JACKET); px(9, 14, s, JACKET);
+    px(7, 12, s, JACKET); px(8, 12, s, JACKET);
+
+    px(5, 13, s, JACKET); px(10, 13, s, JACKET);
+    px(4, 14, s, JACKET); px(11, 14, s, JACKET);
+    px(4, 15, s, GLOVE);  px(11, 15, s, GLOVE);
+
+    px(7, 10, s, HELM); px(8, 10, s, HELM);
+    px(6, 11, s, HELM); px(7, 11, s, HELM); px(8, 11, s, HELM); px(9, 11, s, HELM);
+    px(7, 11, s, "rgba(0,0,0,0.55)");
+    px(8, 11, s, "rgba(0,0,0,0.55)");
+    px(7, 12, s, FACE);
+
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.imageSmoothingEnabled = false;
+
+    // Snow base
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W(), H());
+
+    // subtle bands
+    for (let i = 0; i < 9; i++) {
+      const y = (i / 9) * H();
+      ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
+      ctx.fillRect(0, y, W(), H() / 9);
     }
 
-    function handleSwipe(dx, dy, dtMs) {
-      if (!game.trick.active || game.trick.resolved) return;
-
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-      const dist = Math.hypot(dx, dy);
-      if (dist < 40 || dtMs > 500) return;
-      if (absY < absX * 1.2) return;
-
-      const dir = dy < 0 ? "up" : "down";
-      const needed = game.trick.required;
-
-      if (dir === needed) {
-        game.trick.resolved = true;
-        game.trick.active = false;
-
-        const base = 100;
-        const bonus = (game.combo - 1) * 35;
-        game.score += base + bonus;
-        game.combo = Math.min(20, game.combo + 1);
-        game.bestCombo = Math.max(game.bestCombo, game.combo);
-
-        player.airborne = 0.55;
-        player.spinDir = (dir === "up") ? 1 : -1;
-
-        addPowder(player.x, player.y + 10, 18);
-        showToast(dir === "up" ? "Backflip" : "Frontflip");
-      } else {
-        crash("Wrong flip");
-      }
-    }
-
-    function crash(reason) {
-      if (game.state === "crash") return;
-      game.state = "crash";
-      game.crashT = 0;
-      game.trick.active = false;
-      game.trick.resolved = true;
-      game.grind.active = false;
-      game.combo = 1;
-
-      addPowder(player.x, player.y, 28);
-
-      const msg =
-        reason === "Rock" ? "Rocked" :
-        reason === "Tree" ? "Tree'd" :
-        reason === "Wrong flip" ? "Wrong flip" :
-        reason === "No swipe" ? "No swipe" :
-        "Wipeout";
-      showToast(msg);
-    }
-
-    // Distance from point to line segment in 2D
-    function distPointSeg(px, py, x1, y1, x2, y2) {
-      const vx = x2 - x1, vy = y2 - y1;
-      const wx = px - x1, wy = py - y1;
-      const c1 = vx * wx + vy * wy;
-      if (c1 <= 0) return Math.hypot(px - x1, py - y1);
-      const c2 = vx * vx + vy * vy;
-      if (c2 <= c1) return Math.hypot(px - x2, py - y2);
-      const t = c1 / c2;
-      const bx = x1 + t * vx, by = y1 + t * vy;
-      return Math.hypot(px - bx, py - by);
-    }
-
-    function startGrind(rail) {
-      game.grind.active = true;
-      game.grind.railId = rail.id;
-      game.grind.until = performance.now() + 700; // short grind burst
-      game.grind.t = 0;
-      rail.usedUntil = performance.now() + 1200;
-      showToast("Grind");
-    }
-
-    function triggerHalfpipe(pipe) {
-      pipe.usedUntil = performance.now() + 1400;
-      player.airborne = Math.max(player.airborne, 0.75);
-      addPowder(player.x, player.y + 10, 22);
-      game.score += 80 + (game.combo - 1) * 10;
-      showToast("Halfpipe pop");
-    }
-
-    function update(dt) {
-      if (!game.running) return;
-      game.time += dt;
-
-      // movement target
-      let targetX = input.x;
-      if (!input.active) {
-        targetX = clamp(
-          player.x
-          + (keys["arrowleft"] ? -240 * dt : 0)
-          + (keys["arrowright"] ? 240 * dt : 0),
-          25, W() - 25
-        );
-      }
-
-      // If grinding, bias toward the rail position each frame
-      if (game.grind.active) {
-        const rail = rails.find(r => r.id === game.grind.railId);
-        if (rail) targetX = rail.x;
-      }
-
-      const dx = targetX - player.x;
-      player.vx = dx * 10;
-      player.x += dx * clamp(dt * 8, 0, 1);
-      player.x = clamp(player.x, 25, W() - 25);
-
-      game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
-
-      // direction vector
-      let dirX = 0, dirY = 1;
-      if (input.active) {
-        const vx = (input.x - player.x);
-        const vy = (input.y - player.y);
-        const len = Math.hypot(vx, vy) || 1;
-        dirX = vx / len; dirY = vy / len;
-      } else {
-        const vx = player.vx;
-        const vy = 180;
-        const len = Math.hypot(vx, vy) || 1;
-        dirX = vx / len; dirY = vy / len;
-      }
-      player.dirX = dirX;
-      player.dirY = dirY;
-
-      // downhill gating
-      const downhillAlign = dirY;
-      const THRESH = 0.25;
-      let moveFactor = 0;
-      if (downhillAlign > THRESH) {
-        moveFactor = (downhillAlign - THRESH) / (1 - THRESH);
-        moveFactor = moveFactor * moveFactor;
-      }
-      // grinding forces movement (feels good)
-      if (game.grind.active) moveFactor = Math.max(moveFactor, 0.85);
-
-      player.moveFactor = moveFactor;
-
-      const scrollSpeed = game.speed * game.speedMul * moveFactor;
-      game.scrollY += scrollSpeed * dt;
-
-      // smooth carve
-      const rawCarve = clamp(dirX / 0.9, -1, 1);
-      player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
-
-      // swipe
-      if (input.justSwiped) {
-        handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
-        input.justSwiped = false;
-      }
-
-      // spawn/cull ranges
-      const topWorld = -game.scrollY - 140;
-      const bottomWorld = -game.scrollY + H() + 320;
-
-      while (moguls.length < 14) spawnMogul(topWorld - rand(140, 280));
-      while (rocks.length < 7) spawnRock(topWorld - rand(420, 720));
-      while (trees.length < 12) spawnTree(topWorld - rand(140, 320));
-      while (rails.length < 7) spawnRail(topWorld - rand(420, 820));
-      while (halfpipes.length < 5) spawnHalfpipe(topWorld - rand(520, 980));
-
-      function cull(arr) {
-        for (let i = arr.length - 1; i >= 0; i--) {
-          if (arr[i].y > bottomWorld + 900) arr.splice(i, 1);
-        }
-      }
-      cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
-
-      // trick timeout
-      if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) crash("No swipe");
-
-      // grind timer + scoring
-      if (game.grind.active) {
-        game.grind.t += dt;
-        game.score += 30 * dt * Math.max(1, game.combo * 0.6);
-        if (performance.now() > game.grind.until) game.grind.active = false;
-      }
-
-      // collisions (skip some while crashing)
-      if (game.state !== "crash") {
-        // rocks
-        for (const rock of rocks) {
-          const sy = worldToScreenY(rock.y);
-          if (sy < -80 || sy > H() + 80) continue;
-          const rr = (player.r + rock.r) * 0.95;
-          if (dist2(player.x, player.y, rock.x, sy) <= rr * rr) { crash("Rock"); break; }
-        }
-
-        // trees
-        if (game.state !== "crash") {
-          for (const t of trees) {
-            const sy = worldToScreenY(t.y);
-            if (sy < -90 || sy > H() + 90) continue;
-            const rr = (player.r + t.r) * 0.90;
-            if (dist2(player.x, player.y, t.x, sy) <= rr * rr) { crash("Tree"); break; }
-          }
-        }
-
-        // moguls
-        if (game.state !== "crash") {
-          for (const m of moguls) {
-            const sy = worldToScreenY(m.y);
-            if (sy < -100 || sy > H() + 100) continue;
-            const rr = (player.r + m.r) * 0.95;
-            if (!m.used && dist2(player.x, player.y, m.x, sy) <= rr * rr) {
-              m.used = true;
-              beginTrickWindow(m.id);
-              addPowder(player.x, player.y + 8, 12);
-              break;
-            }
-          }
-        }
-
-        // rails - start grind if close and not recently used
-        if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35) {
-          for (const r of rails) {
-            if (performance.now() < r.usedUntil) continue;
-            const sy = worldToScreenY(r.y);
-            const a = r.angle;
-            const dx = Math.sin(a) * r.len;
-            const dy = Math.cos(a) * r.len;
-            const x1 = r.x - dx * 0.5;
-            const y1 = sy - dy * 0.5;
-            const x2 = r.x + dx * 0.5;
-            const y2 = sy + dy * 0.5;
-
-            if (Math.min(y1, y2) > H() + 80 || Math.max(y1, y2) < -80) continue;
-            const d = distPointSeg(player.x, player.y, x1, y1, x2, y2);
-            if (d < 14 && player.airborne <= 0.02) {
-              startGrind(r);
-              addPowder(player.x, player.y + 10, 14);
-              break;
-            }
-          }
-        }
-
-        // halfpipes - trigger pop when entering bowl region
-        if (game.state !== "crash") {
-          for (const hp of halfpipes) {
-            if (performance.now() < hp.usedUntil) continue;
-            const sy = worldToScreenY(hp.y);
-            if (sy < -140 || sy > H() + 200) continue;
-            const left = hp.x - hp.w * 0.5;
-            const right = hp.x + hp.w * 0.5;
-            const top = sy - hp.h;
-            const bottom = sy + hp.h * 0.6;
-
-            if (player.x > left && player.x < right && player.y > top && player.y < bottom) {
-              triggerHalfpipe(hp);
-              break;
-            }
-          }
-        }
-      }
-
-      // trick animation
-      if (player.airborne > 0) {
-        player.airborne = Math.max(0, player.airborne - dt);
-        player.spin += player.spinDir * dt * 10.5;
-      } else {
-        player.spin = 0;
-        player.spinDir = 0;
-      }
-
-      // particles
-      for (let i = snowFX.length - 1; i >= 0; i--) {
-        const p = snowFX[i];
-        p.t += dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vy += 260 * dt;
-        if (p.t >= p.life) snowFX.splice(i, 1);
-      }
-
-      // crash state
-      if (game.state === "crash") {
-        game.crashT += dt;
-        if (game.crashT > 1.2) {
-          game.running = false;
-          showToast("Wipeout - tap Restart");
-        }
-      }
-
-      ui.score.textContent = `Score: ${Math.floor(game.score)}`;
-      ui.combo.textContent = `Combo: x${game.combo}`;
-      ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor).toFixed(1)}`;
-    }
-
-    // Pixel sprite (uphill-facing rider)
-    function px(x, y, s, color) {
-      ctx.fillStyle = color;
-      ctx.fillRect(x * s, y * s, s, s);
-    }
-
-    function drawSnowboarder8bit(crashed) {
-      const s = 2.3;
-      const hop = (player.airborne > 0) ? -6 : 0;
-
-      const OUT = "rgba(0,0,0,0.55)";
-      const HELM = crashed ? "rgba(255,120,150,0.95)" : "rgba(245,245,255,0.95)";
-      const FACE = "rgba(245,210,170,0.95)";
-      const JACKET = crashed ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
-      const PANTS = "rgba(60,90,140,0.95)";
-      const GLOVE = "rgba(230,230,240,0.9)";
-      const BOARD = "rgba(255,255,255,0.95)";
-      const BOARD2 = "rgba(0,0,0,0.22)";
-
-      const carve = player.carve;
-      const mv = player.moveFactor;
-      const absC = Math.abs(carve);
-
-      const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
-      const boardAngleMag = targetMoving * mv;
-
-      // inverted yaw (your last good feel)
-      const boardYaw = -boardAngleMag * Math.sign(carve || 1);
-
-      // stance shift: left drag shifts right (same as earlier)
-      const side = -Math.sign(carve || 1);
-      const stanceX = side * (2 + 4 * absC) * mv;
-      const stanceY = 0.5 * mv;
+    // halfpipes
+    for (const hp of halfpipes) {
+      const hx = sx(hp.x);
+      const hy = sy(hp.y);
+      if (hy < -240 || hy > H() + 260) continue;
 
       ctx.save();
-      ctx.imageSmoothingEnabled = false;
-
-      ctx.translate(-8 * s, (-18 * s) + hop);
-      ctx.translate(stanceX * s, stanceY * s);
-
-      // shadow
-      ctx.save();
-      ctx.globalAlpha = 0.14;
-      ctx.fillStyle = "#000";
-      ctx.fillRect(4 * s, 22 * s, 8 * s, 3 * s);
-      ctx.restore();
-
-      // board
-      ctx.save();
-      ctx.translate(8 * s, 20 * s);
-      ctx.rotate(boardYaw);
-      ctx.translate(-8 * s, -20 * s);
-
-      for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
-      px(3, 19, s, OUT); px(12, 19, s, OUT);
-      for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
-      for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
-      px(3, 20, s, "rgba(255,70,90,0.85)");
-      px(12, 20, s, "rgba(90,180,255,0.85)");
-      ctx.restore();
-
-      // rider
-      px(6, 18, s, OUT); px(9, 18, s, OUT);
-      px(6, 17, s, PANTS); px(9, 17, s, PANTS);
-
-      px(6, 16, s, PANTS); px(7, 16, s, PANTS); px(8, 16, s, PANTS); px(9, 16, s, PANTS);
-      px(7, 15, s, PANTS); px(8, 15, s, PANTS);
-
-      px(6, 13, s, JACKET); px(7, 13, s, JACKET); px(8, 13, s, JACKET); px(9, 13, s, JACKET);
-      px(6, 14, s, JACKET); px(7, 14, s, JACKET); px(8, 14, s, JACKET); px(9, 14, s, JACKET);
-      px(7, 12, s, JACKET); px(8, 12, s, JACKET);
-
-      px(5, 13, s, JACKET); px(10, 13, s, JACKET);
-      px(4, 14, s, JACKET); px(11, 14, s, JACKET);
-      px(4, 15, s, GLOVE);  px(11, 15, s, GLOVE);
-
-      px(7, 10, s, HELM); px(8, 10, s, HELM);
-      px(6, 11, s, HELM); px(7, 11, s, HELM); px(8, 11, s, HELM); px(9, 11, s, HELM);
-      px(7, 11, s, "rgba(0,0,0,0.55)");
-      px(8, 11, s, "rgba(0,0,0,0.55)");
-      px(7, 12, s, FACE);
-
-      ctx.restore();
-    }
-
-    // Drawing world
-    function draw() {
-      ctx.imageSmoothingEnabled = false;
-
-      // Snow base
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, W(), H());
-
-      // subtle slope bands (very light blue-gray)
-      for (let i = 0; i < 9; i++) {
-        const y = (i / 9) * H();
-        ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
-        ctx.fillRect(0, y, W(), H() / 9);
-      }
-
-      // slope edges
-      ctx.strokeStyle = "rgba(10,20,40,0.06)";
-      ctx.lineWidth = 2;
+      ctx.fillStyle = "rgba(10,20,40,0.05)";
       ctx.beginPath();
-      ctx.moveTo(18, 0); ctx.lineTo(18, H());
-      ctx.moveTo(W() - 18, 0); ctx.lineTo(W() - 18, H());
+      ctx.ellipse(hx, hy + hp.h * 0.1, hp.w * 0.55, hp.h * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(10,20,40,0.10)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(hx - hp.w * 0.5, hy - hp.h * 0.4);
+      ctx.quadraticCurveTo(hx, hy - hp.h, hx + hp.w * 0.5, hy - hp.h * 0.4);
       ctx.stroke();
-
-      // halfpipes (draw first so things sit over them)
-      for (const hp of halfpipes) {
-        const sy = worldToScreenY(hp.y);
-        if (sy < -200 || sy > H() + 240) continue;
-
-        const left = hp.x - hp.w * 0.5;
-        const right = hp.x + hp.w * 0.5;
-
-        ctx.save();
-        // bowl shadow
-        ctx.fillStyle = "rgba(10,20,40,0.05)";
-        ctx.beginPath();
-        ctx.ellipse(hp.x, sy + hp.h * 0.1, hp.w * 0.55, hp.h * 0.55, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // lip lines
-        ctx.strokeStyle = "rgba(10,20,40,0.10)";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(left, sy - hp.h * 0.4);
-        ctx.quadraticCurveTo(hp.x, sy - hp.h, right, sy - hp.h * 0.4);
-        ctx.stroke();
-
-        // inside bowl hint
-        ctx.strokeStyle = "rgba(10,20,40,0.06)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.ellipse(hp.x, sy + hp.h * 0.05, hp.w * 0.45, hp.h * 0.40, 0, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.restore();
-      }
-
-      // rails
-      for (const r of rails) {
-        const sy = worldToScreenY(r.y);
-        const a = r.angle;
-        const dx = Math.sin(a) * r.len;
-        const dy = Math.cos(a) * r.len;
-        const x1 = r.x - dx * 0.5;
-        const y1 = sy - dy * 0.5;
-        const x2 = r.x + dx * 0.5;
-        const y2 = sy + dy * 0.5;
-
-        if (Math.min(y1, y2) > H() + 120 || Math.max(y1, y2) < -120) continue;
-
-        ctx.save();
-        // rail shadow
-        ctx.strokeStyle = "rgba(0,0,0,0.10)";
-        ctx.lineWidth = 8;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1 + 2);
-        ctx.lineTo(x2, y2 + 2);
-        ctx.stroke();
-
-        // rail body
-        ctx.strokeStyle = "rgba(20,30,45,0.75)";
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-
-        // highlight
-        ctx.strokeStyle = "rgba(255,255,255,0.55)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1 - 1);
-        ctx.lineTo(x2, y2 - 1);
-        ctx.stroke();
-
-        ctx.restore();
-      }
-
-      // rocks
-      for (const rock of rocks) {
-        const sy = worldToScreenY(rock.y);
-        if (sy < -100 || sy > H() + 100) continue;
-        ctx.save();
-        ctx.translate(rock.x, sy);
-        ctx.fillStyle = "rgba(30,35,45,0.85)";
-        ctx.beginPath();
-        ctx.arc(0, 0, rock.r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "rgba(255,255,255,0.20)";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      // trees
-      for (const t of trees) {
-        const sy = worldToScreenY(t.y);
-        if (sy < -120 || sy > H() + 120) continue;
-
-        ctx.save();
-        ctx.translate(t.x, sy);
-
-        // snow mound
-        ctx.fillStyle = "rgba(10,20,40,0.04)";
-        ctx.beginPath();
-        ctx.ellipse(0, 10, t.r * 1.15, t.r * 0.75, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // trunk/stump
-        ctx.fillStyle = "rgba(120,80,45,0.95)";
-        ctx.fillRect(-6, 2, 12, 14);
-
-        // pine canopy
-        ctx.fillStyle = "rgba(30,140,70,0.95)";
-        ctx.beginPath();
-        ctx.moveTo(0, -26);
-        ctx.lineTo(-22, 4);
-        ctx.lineTo(22, 4);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(20,110,55,0.95)";
-        ctx.beginPath();
-        ctx.moveTo(0, -14);
-        ctx.lineTo(-18, 10);
-        ctx.lineTo(18, 10);
-        ctx.closePath();
-        ctx.fill();
-
-        // tiny snow cap
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.beginPath();
-        ctx.moveTo(0, -28);
-        ctx.lineTo(-7, -18);
-        ctx.lineTo(7, -18);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.restore();
-      }
-
-      // moguls
-      for (const m of moguls) {
-        const sy = worldToScreenY(m.y);
-        if (sy < -120 || sy > H() + 120) continue;
-        ctx.save();
-        ctx.translate(m.x, sy);
-        ctx.fillStyle = "rgba(10,20,40,0.05)";
-        ctx.beginPath();
-        ctx.arc(0, 0, m.r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "rgba(10,20,40,0.04)";
-        ctx.beginPath();
-        ctx.arc(-m.r * 0.25, -m.r * 0.25, m.r * 0.55, 0, Math.PI * 2);
-        ctx.fill();
-        if (m.used) {
-          ctx.fillStyle = "rgba(0,0,0,0.03)";
-          ctx.beginPath();
-          ctx.arc(0, 0, m.r, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
-      }
-
-      // powder particles
-      for (const fx of snowFX) {
-        const a = 1 - (fx.t / fx.life);
-        ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
-        ctx.fillRect(fx.x, fx.y, 2, 2);
-      }
-
-      // player
-      ctx.save();
-      ctx.translate(player.x, player.y);
-
-      const aim = Math.atan2(player.dirY, player.dirX);
-
-      // uphill-facing rider
-      const baseRot = (aim - Math.PI / 2) + Math.PI;
-      const rot = baseRot + player.spin * 0.35;
-      ctx.rotate(rot);
-
-      // grind spark ring
-      if (game.grind.active && game.state !== "crash") {
-        ctx.globalAlpha = 0.35;
-        ctx.strokeStyle = "rgba(0,0,0,0.18)";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, 0, player.r + 10, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-
-      // trick ring
-      if (game.trick.active && game.state !== "crash") {
-        const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
-        ctx.strokeStyle = game.trick.required === "up" ? "rgba(20,160,80,0.45)" : "rgba(220,140,40,0.45)";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, 0, player.r + 12, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
-        ctx.stroke();
-      }
-
-      drawSnowboarder8bit(game.state === "crash");
       ctx.restore();
-
-      // game over overlay
-      if (!game.running) {
-        ctx.save();
-        ctx.fillStyle = "rgba(255,255,255,0.75)";
-        ctx.fillRect(0, 0, W(), H());
-        ctx.fillStyle = "rgba(10,20,35,0.95)";
-        ctx.font = "800 30px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-        ctx.textAlign = "center";
-        ctx.fillText("Snowboard Free", W() * 0.5, H() * 0.40);
-        ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-        ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W() * 0.5, H() * 0.46);
-        ctx.fillText("Press Restart to shred again", W() * 0.5, H() * 0.52);
-        ctx.restore();
-      }
     }
 
-    // Main loop
-    let last = performance.now();
-    function loop(now) {
-      const dt = Math.min(0.033, (now - last) / 1000);
-      last = now;
+    // rails
+    for (const r of rails) {
+      const cx = sx(r.x);
+      const cy = sy(r.y);
+      const a = r.angle;
+      const dx = Math.sin(a) * r.len;
+      const dy = Math.cos(a) * r.len;
+      const x1 = cx - dx * 0.5;
+      const y1 = cy - dy * 0.5;
+      const x2 = cx + dx * 0.5;
+      const y2 = cy + dy * 0.5;
 
-      update(dt);
-      draw();
+      if (Math.min(y1, y2) > H() + 140 || Math.max(y1, y2) < -140) continue;
 
-      requestAnimationFrame(loop);
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,0,0,0.10)";
+      ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.moveTo(x1, y1 + 2); ctx.lineTo(x2, y2 + 2); ctx.stroke();
+
+      ctx.strokeStyle = "rgba(20,30,45,0.75)";
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x1, y1 - 1); ctx.lineTo(x2, y2 - 1); ctx.stroke();
+      ctx.restore();
     }
+
+    // rocks
+    for (const rock of rocks) {
+      const rx = sx(rock.x);
+      const ry = sy(rock.y);
+      if (ry < -120 || ry > H() + 120) continue;
+      ctx.save();
+      ctx.translate(rx, ry);
+      ctx.fillStyle = "rgba(30,35,45,0.85)";
+      ctx.beginPath(); ctx.arc(0, 0, rock.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.20)";
+      ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    }
+
+    // trees
+    for (const t of trees) {
+      const tx = sx(t.x);
+      const ty = sy(t.y);
+      if (ty < -140 || ty > H() + 140) continue;
+
+      ctx.save();
+      ctx.translate(tx, ty);
+
+      ctx.fillStyle = "rgba(10,20,40,0.04)";
+      ctx.beginPath();
+      ctx.ellipse(0, 10, t.r * 1.15, t.r * 0.75, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(120,80,45,0.95)";
+      ctx.fillRect(-6, 2, 12, 14);
+
+      ctx.fillStyle = "rgba(30,140,70,0.95)";
+      ctx.beginPath();
+      ctx.moveTo(0, -26);
+      ctx.lineTo(-22, 4);
+      ctx.lineTo(22, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(20,110,55,0.95)";
+      ctx.beginPath();
+      ctx.moveTo(0, -14);
+      ctx.lineTo(-18, 10);
+      ctx.lineTo(18, 10);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.beginPath();
+      ctx.moveTo(0, -28);
+      ctx.lineTo(-7, -18);
+      ctx.lineTo(7, -18);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // moguls
+    for (const m of moguls) {
+      const mx = sx(m.x);
+      const my = sy(m.y);
+      if (my < -140 || my > H() + 140) continue;
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.fillStyle = "rgba(10,20,40,0.05)";
+      ctx.beginPath(); ctx.arc(0, 0, m.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(10,20,40,0.04)";
+      ctx.beginPath(); ctx.arc(-m.r * 0.25, -m.r * 0.25, m.r * 0.55, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    // powder
+    for (const fx of snowFX) {
+      const a = 1 - (fx.t / fx.life);
+      ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
+      ctx.fillRect(fx.x, fx.y, 2, 2);
+    }
+
+    // player at screen center X
+    ctx.save();
+    ctx.translate(W()*0.5, player.wy);
+
+    const aim = Math.atan2(player.dirY, player.dirX);
+    const baseRot = (aim - Math.PI / 2) + Math.PI; // uphill-facing
+    const rot = baseRot + player.spin * 0.35;
+    ctx.rotate(rot);
+
+    if (game.grind.active && game.state !== "crash") {
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "rgba(0,0,0,0.18)";
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, player.r + 10, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    if (game.trick.active && game.state !== "crash") {
+      const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
+      ctx.strokeStyle = game.trick.required === "up" ? "rgba(20,160,80,0.45)" : "rgba(220,140,40,0.45)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, player.r + 12, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
+      ctx.stroke();
+    }
+
+    drawSnowboarder8bit(game.state === "crash");
+    ctx.restore();
+
+    // game over
+    if (!game.running) {
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.fillRect(0, 0, W(), H());
+      ctx.fillStyle = "rgba(10,20,35,0.95)";
+      ctx.font = "800 30px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Snowboard Free", W()*0.5, H()*0.40);
+      ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W()*0.5, H()*0.46);
+      ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.52);
+      ctx.restore();
+    }
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
     requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
 
-    // Touch swipe capture
-    // (kept down here so logic reads cleanly)
-    // Update trick window when swipe ends
-    window.addEventListener("touchend", () => {
-      // handled in onPointerUp already
-    }, { passive:true });
-  </script>
+})();
+</script>
 </body>
 </html>
