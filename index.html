@@ -168,17 +168,13 @@
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
   // Camera
-  const camera = {
-    x: 0,
-    y: 0,
-    follow: 0.12,
-  };
+  const camera = { x: 0, y: 0, follow: 0.12 };
 
-  // Tuning knobs for the new landing-based crash system
-  const DOWNHILL_THRESH_MOVE = 0.25; // must be pointing downhill to move much
-  const DOWNHILL_THRESH_LAND = 0.18; // must be pointing downhill on landing or crash
-  const AIR_SPEED_BOOST = 1.45;      // airborne makes you move faster downhill
-  const AIR_FORCE_MOVE = 0.90;       // airborne reduces "stopping" in the air
+  // Tuning
+  const DOWNHILL_THRESH_MOVE = 0.25;
+  const DOWNHILL_THRESH_LAND = 0.18;
+  const AIR_SPEED_BOOST = 1.45;
+  const AIR_FORCE_MOVE = 0.90;
 
   const game = {
     running: true,
@@ -192,8 +188,6 @@
     crashT: 0,
 
     grind: { active:false, until:0, railId:null, t:0 },
-
-    // Trick is now optional during airtime (no required direction)
     trick: { active:false, done:false, type:null },
   };
 
@@ -211,9 +205,12 @@
     dirY: 1,
     carve: 0,
     moveFactor: 0,
+
+    // visual bank angle used by the sprite
+    visualYaw: 0,
   };
 
-  // World objects (world coords)
+  // World objects
   let nextId = 1;
   const moguls = [];
   const rocks = [];
@@ -226,7 +223,6 @@
   function sx(worldX) { return worldX - camera.x + W() * 0.5; }
   function sy(worldY) { return worldY + camera.y; }
 
-  // Spawns around camera.x center
   function spawnMogul(worldY) {
     moguls.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(18, 26), used:false });
   }
@@ -242,9 +238,19 @@
     rails.push({ id: nextId++, x: camera.x + rand(-W()*0.45, W()*0.45), y: worldY, len, angle, usedUntil: 0 });
   }
   function spawnHalfpipe(worldY) {
-    const w = rand(160, 240);
-    const h = rand(60, 90);
-    halfpipes.push({ id: nextId++, x: camera.x + rand(-W()*0.40, W()*0.40), y: worldY, w, h, usedUntil: 0 });
+    const w = rand(170, 260);
+    const h = rand(60, 95);
+    // lips (various)
+    const lipA = rand(0.6, 1.25);
+    const lipB = rand(0.6, 1.25);
+    halfpipes.push({
+      id: nextId++,
+      x: camera.x + rand(-W()*0.40, W()*0.40),
+      y: worldY,
+      w, h,
+      lipA, lipB,
+      usedUntil: 0
+    });
   }
 
   function addPowder(screenX, screenY, n = 10) {
@@ -260,7 +266,6 @@
     }
   }
 
-  // Point to segment distance
   function distPointSeg(px, py, x1, y1, x2, y2) {
     const vx = x2 - x1, vy = y2 - y1;
     const wx = px - x1, wy = py - y1;
@@ -287,16 +292,11 @@
     showToast(reason || "Wipeout");
   }
 
-  // Launch into airtime (mogul/halfpipe/jump)
   function launch(kind) {
-    // airtime always happens
-    player.airborne = Math.max(player.airborne, kind === "halfpipe" ? 0.85 : 0.65);
-    // open optional trick window
+    player.airborne = Math.max(player.airborne, kind === "halfpipe" ? 0.90 : 0.70);
     game.trick.active = true;
     game.trick.done = false;
     game.trick.type = null;
-
-    // cancel grind if you pop
     game.grind.active = false;
 
     addPowder(W()*0.5, player.wy + 10, 18);
@@ -304,7 +304,6 @@
   }
 
   function handleSwipe(dx, dy, dtMs) {
-    // Only allow a trick while airborne and only once per airtime
     if (!game.trick.active || game.trick.done || player.airborne <= 0.01) return;
 
     const absX = Math.abs(dx);
@@ -317,16 +316,13 @@
     game.trick.done = true;
     game.trick.type = (dir === "up") ? "backflip" : "frontflip";
 
-    // scoring
     const base = (dir === "up") ? 110 : 90;
     const bonus = (game.combo - 1) * 30;
     game.score += base + bonus;
     game.combo = Math.min(20, game.combo + 1);
     game.bestCombo = Math.max(game.bestCombo, game.combo);
 
-    // spin direction
     player.spinDir = (dir === "up") ? 1 : -1;
-
     showToast(dir === "up" ? "Backflip" : "Frontflip");
   }
 
@@ -368,6 +364,7 @@
     player.dirY = 1;
     player.carve = 0;
     player.moveFactor = 0;
+    player.visualYaw = 0;
 
     moguls.length = 0;
     rocks.length = 0;
@@ -382,7 +379,7 @@
     for (let i = 0; i < 6; i++) spawnRail(-i * 520 - 350);
     for (let i = 0; i < 5; i++) spawnHalfpipe(-i * 680 - 600);
 
-    showToast("Clean runs only");
+    showToast("Shred mode");
   }
 
   ui.restart.addEventListener("click", reset);
@@ -407,9 +404,8 @@
     player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
     player.wx += player.vx * dt;
 
-    // Direction vector for downhill gating
+    // Direction for downhill gating
     let dirX = intent, dirY = 1;
-
     if (input.active) {
       const dy = input.y - player.wy; // finger below = positive
       dirY = clamp(dy / 220, -1, 1);
@@ -424,7 +420,7 @@
 
     game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
-    // Base downhill movement factor
+    // Downhill movement factor
     const downhillAlign = player.dirY;
     let moveFactor = 0;
     if (downhillAlign > DOWNHILL_THRESH_MOVE) {
@@ -432,8 +428,6 @@
       moveFactor = moveFactor * moveFactor;
     }
 
-    // Airborne rules:
-    // - you keep moving and you go faster
     const airborneNow = player.airborne > 0.01;
     if (airborneNow) moveFactor = Math.max(moveFactor, AIR_FORCE_MOVE);
     if (game.grind.active) moveFactor = Math.max(moveFactor, 0.85);
@@ -447,9 +441,16 @@
     // Camera follow
     camera.x += (player.wx - camera.x) * clamp(camera.follow, 0, 1);
 
-    // Smooth carve for sprite
+    // Carve smoothing
     const rawCarve = clamp(player.dirX / 0.9, -1, 1);
     player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
+
+    // Sprite visual yaw: board + rider bank into carve when moving
+    const absC = Math.abs(player.carve);
+    const mv = player.moveFactor;
+    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC; // 45 to 90
+    const yawMag = targetMoving * mv;
+    player.visualYaw = -yawMag * Math.sign(player.carve || 1); // bank direction
 
     // Swipes during airtime
     if (input.justSwiped) {
@@ -481,9 +482,9 @@
       if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    // Collisions and interactions (screen space)
+    // Collisions/interactions
     if (game.state !== "crash") {
-      // Rocks stop you (crash)
+      // Rocks stop you
       for (const rock of rocks) {
         const rx = sx(rock.x);
         const ry = sy(rock.y);
@@ -492,7 +493,7 @@
         if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rocked"); break; }
       }
 
-      // Trees stop you (crash)
+      // Trees stop you
       if (game.state !== "crash") {
         for (const t of trees) {
           const tx = sx(t.x);
@@ -503,7 +504,7 @@
         }
       }
 
-      // Moguls launch (no crash)
+      // Moguls launch
       if (game.state !== "crash") {
         for (const m of moguls) {
           const mx = sx(m.x);
@@ -518,7 +519,7 @@
         }
       }
 
-      // Rails grind
+      // Rails grind (no grind in air)
       if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
         for (const r of rails) {
           if (performance.now() < r.usedUntil) continue;
@@ -544,21 +545,22 @@
         }
       }
 
-      // Halfpipes launch (no crash)
+      // Halfpipes launch (rotated 90 degrees longways)
       if (game.state !== "crash") {
         for (const hp of halfpipes) {
           if (performance.now() < hp.usedUntil) continue;
 
           const hx = sx(hp.x);
           const hy = sy(hp.y);
-          if (hy < -200 || hy > H() + 240) continue;
+          if (hy < -240 || hy > H() + 260) continue;
 
-          const left = hx - hp.w * 0.5;
-          const right = hx + hp.w * 0.5;
-          const top = hy - hp.h;
-          const bottom = hy + hp.h * 0.6;
-
-          if (W()*0.5 > left && W()*0.5 < right && player.wy > top && player.wy < bottom) {
+          // collision as ellipse (rotated look, but ellipse handles it fine)
+          // since the pipe is "longways", major axis is along screen Y:
+          const a = hp.h * 1.05;      // x-radius (narrow)
+          const b = hp.w * 0.32;      // y-radius (long)
+          const px = (W()*0.5 - hx) / a;
+          const py = (player.wy - hy) / b;
+          if ((px*px + py*py) <= 1.0) {
             hp.usedUntil = performance.now() + 1400;
             launch("halfpipe");
             break;
@@ -567,12 +569,11 @@
       }
     }
 
-    // Airborne update + landing check
+    // Airborne + landing check
     const wasAirborne = player.airborne > 0.01;
 
     if (player.airborne > 0) {
       player.airborne = Math.max(0, player.airborne - dt);
-      // spin only if you tricked (spinDir set by swipe)
       player.spin += player.spinDir * dt * 10.5;
     } else {
       player.spin = 0;
@@ -581,14 +582,11 @@
 
     const landedNow = wasAirborne && player.airborne <= 0.01;
     if (landedNow && game.state !== "crash") {
-      // Close trick window on landing
       game.trick.active = false;
 
-      // Bad landing rule: if you're not pointed downhill, you crash
       if (player.dirY <= DOWNHILL_THRESH_LAND) {
         crash("Bad landing");
       } else {
-        // clean landing, no penalty (and no forced trick)
         showToast(game.trick.done ? "Landed" : "Clean landing");
       }
     }
@@ -624,6 +622,7 @@
     ctx.fillRect(x * s, y * s, s, s);
   }
 
+  // Snowboarder: board + rider bank together now (no weird upright look)
   function drawSnowboarder8bit(crashed) {
     const s = 2.3;
     const hop = (player.airborne > 0) ? -6 : 0;
@@ -640,16 +639,10 @@
     const carve = player.carve;
     const mv = player.moveFactor;
     const absC = Math.abs(carve);
-
-    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
-    const boardAngleMag = targetMoving * mv;
-
-    // inverted yaw for the feel you liked
-    const boardYaw = -boardAngleMag * Math.sign(carve || 1);
-
-    // stance shift: left intent shifts right
     const side = -Math.sign(carve || 1);
-    const stanceX = side * (2 + 4 * absC) * mv;
+
+    // stance shift feels better while banking
+    const stanceX = side * (1.5 + 3.0 * absC) * mv;
     const stanceY = 0.5 * mv;
 
     ctx.save();
@@ -658,28 +651,20 @@
     ctx.translate(-8 * s, (-18 * s) + hop);
     ctx.translate(stanceX * s, stanceY * s);
 
-    // shadow
-    ctx.save();
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(4 * s, 22 * s, 8 * s, 3 * s);
-    ctx.restore();
+    // (Removed the old shadow rect completely - this was your grey square)
 
-    // board
-    ctx.save();
-    ctx.translate(8 * s, 20 * s);
-    ctx.rotate(boardYaw);
-    ctx.translate(-8 * s, -20 * s);
-
+    // board (no separate yaw here; entire sprite banks together via outer rotation)
     for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
     px(3, 19, s, OUT); px(12, 19, s, OUT);
+
     for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
     for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
+
+    // tip highlights
     px(3, 20, s, "rgba(255,70,90,0.85)");
     px(12, 20, s, "rgba(90,180,255,0.85)");
-    ctx.restore();
 
-    // rider
+    // rider (same grid as before, but now it banks with the board)
     px(6, 18, s, OUT); px(9, 18, s, OUT);
     px(6, 17, s, PANTS); px(9, 17, s, PANTS);
 
@@ -696,6 +681,7 @@
 
     px(7, 10, s, HELM); px(8, 10, s, HELM);
     px(6, 11, s, HELM); px(7, 11, s, HELM); px(8, 11, s, HELM); px(9, 11, s, HELM);
+
     px(7, 11, s, "rgba(0,0,0,0.55)");
     px(8, 11, s, "rgba(0,0,0,0.55)");
     px(7, 12, s, FACE);
@@ -717,24 +703,44 @@
       ctx.fillRect(0, y, W(), H() / 9);
     }
 
-    // Halfpipes
+    // Halfpipes (rotated 90 degrees longways + various lips)
     for (const hp of halfpipes) {
       const hx = sx(hp.x);
       const hy = sy(hp.y);
-      if (hy < -240 || hy > H() + 260) continue;
+      if (hy < -280 || hy > H() + 280) continue;
 
       ctx.save();
+      ctx.translate(hx, hy);
+      ctx.rotate(Math.PI / 2); // flip 90 degrees so it's longways
+
+      // base trench
       ctx.fillStyle = "rgba(10,20,40,0.05)";
       ctx.beginPath();
-      ctx.ellipse(hx, hy + hp.h * 0.1, hp.w * 0.55, hp.h * 0.55, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, hp.w * 0.22, hp.h * 0.95, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(10,20,40,0.10)";
-      ctx.lineWidth = 3;
+      // inner shading
+      ctx.fillStyle = "rgba(10,20,40,0.035)";
       ctx.beginPath();
-      ctx.moveTo(hx - hp.w * 0.5, hy - hp.h * 0.4);
-      ctx.quadraticCurveTo(hx, hy - hp.h, hx + hp.w * 0.5, hy - hp.h * 0.4);
+      ctx.ellipse(0, 0, hp.w * 0.16, hp.h * 0.78, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // lips (vary per pipe)
+      ctx.strokeStyle = "rgba(10,20,40,0.12)";
+      ctx.lineWidth = 3;
+
+      // left lip
+      ctx.beginPath();
+      ctx.moveTo(-hp.w * 0.22, -hp.h * 0.55);
+      ctx.quadraticCurveTo(-hp.w * 0.22 * hp.lipA, -hp.h * 0.90, -hp.w * 0.22, -hp.h * 1.05);
       ctx.stroke();
+
+      // right lip
+      ctx.beginPath();
+      ctx.moveTo(hp.w * 0.22, -hp.h * 0.55);
+      ctx.quadraticCurveTo(hp.w * 0.22 * hp.lipB, -hp.h * 0.90, hp.w * 0.22, -hp.h * 1.05);
+      ctx.stroke();
+
       ctx.restore();
     }
 
@@ -781,7 +787,7 @@
       ctx.restore();
     }
 
-    // Trees
+    // Trees (flipped 180)
     for (const t of trees) {
       const tx = sx(t.x);
       const ty = sy(t.y);
@@ -789,6 +795,7 @@
 
       ctx.save();
       ctx.translate(tx, ty);
+      ctx.rotate(Math.PI); // flip 180 as requested
 
       ctx.fillStyle = "rgba(10,20,40,0.04)";
       ctx.beginPath();
@@ -839,7 +846,7 @@
       ctx.restore();
     }
 
-    // Powder particles
+    // Powder
     for (const fx of snowFX) {
       const a = 1 - (fx.t / fx.life);
       ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
@@ -850,14 +857,15 @@
     ctx.save();
     ctx.translate(W()*0.5, player.wy);
 
-    const aim = Math.atan2(player.dirY, player.dirX);
-    const baseRot = (aim - Math.PI / 2) + Math.PI; // uphill facing
-    const rot = baseRot + player.spin * 0.35;
-    ctx.rotate(rot);
+    // Rotate whole sprite into the carve (this is the fix for "upright rider")
+    // Keep uphill vibe by blending: when stopped, less yaw; when moving, more yaw.
+    const bank = player.visualYaw;
+    const spin = player.spin * 0.35;
+    ctx.rotate(bank + spin);
 
-    // Simple ring when airborne to show "airtime mode"
+    // Air ring
     if (player.airborne > 0.01 && game.state !== "crash") {
-      ctx.globalAlpha = 0.25;
+      ctx.globalAlpha = 0.22;
       ctx.strokeStyle = "rgba(0,0,0,0.20)";
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(0, 0, player.r + 12, 0, Math.PI*2); ctx.stroke();
@@ -867,7 +875,7 @@
     drawSnowboarder8bit(game.state === "crash");
     ctx.restore();
 
-    // Game over overlay
+    // Game over
     if (!game.running) {
       ctx.save();
       ctx.fillStyle = "rgba(255,255,255,0.78)";
