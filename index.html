@@ -133,14 +133,12 @@
       input.swipeStartT = performance.now();
       input.justSwiped = false;
     }
-
     function onPointerMove(e) {
       if (!input.active) return;
       e.preventDefault();
       const p = pointerPos(e);
       input.x = p.x; input.y = p.y;
     }
-
     function onPointerUp(e) {
       if (!input.active) return;
       e.preventDefault();
@@ -186,7 +184,6 @@
       y: H() * 0.70,
       r: 14,
       vx: 0,
-      tilt: 0,
       spin: 0,
       spinDir: 0,
       airborne: 0,
@@ -217,7 +214,6 @@
       player.x = W() * 0.5;
       player.y = H() * 0.70;
       player.vx = 0;
-      player.tilt = 0;
       player.spin = 0;
       player.spinDir = 0;
       player.airborne = 0;
@@ -278,8 +274,6 @@
       player.vx = dx * 10;
       player.x += dx * clamp(dt * 8, 0, 1);
       player.x = clamp(player.x, 25, W() - 25);
-
-      player.tilt = clamp(player.vx / 700, -0.7, 0.7);
 
       game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
@@ -400,11 +394,7 @@
       const absX = Math.abs(dx);
       const absY = Math.abs(dy);
       const dist = Math.hypot(dx, dy);
-
-      const minDist = 40;
-      const maxTime = 500;
-
-      if (dist < minDist || dtMs > maxTime) return;
+      if (dist < 40 || dtMs > 500) return;
       if (absY < absX * 1.2) return;
 
       const dir = dy < 0 ? "up" : "down";
@@ -449,16 +439,13 @@
     }
 
     // Pixel helpers
-    function fillPixel(x, y, s, color) {
+    function p(x, y, s, color) {
       ctx.fillStyle = color;
       ctx.fillRect(x * s, y * s, s, s);
     }
 
     function drawSnowboarder8bit(crashed) {
-      // This sprite is drawn "facing downhill" in its own local space.
-      // Then we rotate the entire snowboarder with boardRot so the rider follows the board.
-
-      const s = 2.3; // sprite pixel scale
+      const s = 2.3;
       const hop = (player.airborne > 0) ? -6 : 0;
 
       const OUT = "rgba(0,0,0,0.55)";
@@ -470,81 +457,70 @@
       const BOARD = "rgba(255,255,255,0.9)";
       const BOARD2 = "rgba(0,0,0,0.30)";
 
-      // carve stance offset (subtle)
-      const carve = player.carve;          // -1..1
-      const mv = player.moveFactor;        // 0..1
+      const carve = player.carve;     // -1..1
+      const mv = player.moveFactor;   // 0..1
       const absC = Math.abs(carve);
 
-      // When moving and carving, board rotates toward perpendicular (45..90 degrees).
-      // When stopped, board rotation contribution is 0 (downhill).
+      // Carve amount: 45..90 when moving, 0 when stopped
       const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC; // 45..90
       const boardAngleMag = targetMoving * mv;
-      const boardYaw = boardAngleMag * Math.sign(carve || 1);
 
-      // stance shift: left drag => board/rider shifts slightly right, and vice versa
-      // (This reads like the board is edged under you, but still attached.)
-      const side = -Math.sign(carve || 1);
-      const stanceX = side * (2 + 4 * absC) * mv; // pixels in sprite-space
+      // IMPORTANT CHANGE:
+      // Invert board yaw so it "follows opposite direction" while stance side stays same.
+      const boardYaw = -boardAngleMag * Math.sign(carve || 1);
+
+      // stance shift stays the same side mapping you liked
+      const side = -Math.sign(carve || 1); // left drag -> shift right
+      const stanceX = side * (2 + 4 * absC) * mv;
       const stanceY = 0.5 * mv;
 
       ctx.save();
       ctx.imageSmoothingEnabled = false;
 
-      // Draw sprite centered
       ctx.translate(-8 * s, (-18 * s) + hop);
       ctx.translate(stanceX * s, stanceY * s);
 
-      // Shadow
+      // shadow
       ctx.save();
       ctx.globalAlpha = 0.18;
       ctx.fillStyle = "#000";
       ctx.fillRect(4 * s, 22 * s, 8 * s, 3 * s);
       ctx.restore();
 
-      // BOARD (under rider) - rotate a bit within the overall rider rotation for extra carve feel
+      // board under rider
       ctx.save();
       ctx.translate(8 * s, 20 * s);
       ctx.rotate(boardYaw);
       ctx.translate(-8 * s, -20 * s);
 
-      // outline
-      for (let x = 2; x <= 13; x++) fillPixel(x, 20, s, OUT);
-      fillPixel(3, 19, s, OUT); fillPixel(12, 19, s, OUT);
-      // fill
-      for (let x = 3; x <= 12; x++) fillPixel(x, 20, s, BOARD);
-      for (let x = 4; x <= 11; x++) fillPixel(x, 21, s, BOARD2);
-      // tip dots
-      fillPixel(3, 20, s, "rgba(255,70,90,0.85)");
-      fillPixel(12, 20, s, "rgba(90,180,255,0.85)");
-
+      for (let x = 2; x <= 13; x++) p(x, 20, s, OUT);
+      p(3, 19, s, OUT); p(12, 19, s, OUT);
+      for (let x = 3; x <= 12; x++) p(x, 20, s, BOARD);
+      for (let x = 4; x <= 11; x++) p(x, 21, s, BOARD2);
+      p(3, 20, s, "rgba(255,70,90,0.85)");
+      p(12, 20, s, "rgba(90,180,255,0.85)");
       ctx.restore();
 
-      // Boots on board
-      fillPixel(6, 18, s, OUT); fillPixel(9, 18, s, OUT);
-      fillPixel(6, 17, s, PANTS); fillPixel(9, 17, s, PANTS);
+      // rider
+      p(6, 18, s, OUT); p(9, 18, s, OUT);
+      p(6, 17, s, PANTS); p(9, 17, s, PANTS);
 
-      // Legs
-      fillPixel(6, 16, s, PANTS); fillPixel(7, 16, s, PANTS); fillPixel(8, 16, s, PANTS); fillPixel(9, 16, s, PANTS);
-      fillPixel(7, 15, s, PANTS); fillPixel(8, 15, s, PANTS);
+      p(6, 16, s, PANTS); p(7, 16, s, PANTS); p(8, 16, s, PANTS); p(9, 16, s, PANTS);
+      p(7, 15, s, PANTS); p(8, 15, s, PANTS);
 
-      // Jacket
-      fillPixel(6, 13, s, JACKET); fillPixel(7, 13, s, JACKET); fillPixel(8, 13, s, JACKET); fillPixel(9, 13, s, JACKET);
-      fillPixel(6, 14, s, JACKET); fillPixel(7, 14, s, JACKET); fillPixel(8, 14, s, JACKET); fillPixel(9, 14, s, JACKET);
-      fillPixel(7, 12, s, JACKET); fillPixel(8, 12, s, JACKET);
+      p(6, 13, s, JACKET); p(7, 13, s, JACKET); p(8, 13, s, JACKET); p(9, 13, s, JACKET);
+      p(6, 14, s, JACKET); p(7, 14, s, JACKET); p(8, 14, s, JACKET); p(9, 14, s, JACKET);
+      p(7, 12, s, JACKET); p(8, 12, s, JACKET);
 
-      // Arms + gloves
-      fillPixel(5, 13, s, JACKET); fillPixel(10, 13, s, JACKET);
-      fillPixel(4, 14, s, JACKET); fillPixel(11, 14, s, JACKET);
-      fillPixel(4, 15, s, GLOVE);  fillPixel(11, 15, s, GLOVE);
+      p(5, 13, s, JACKET); p(10, 13, s, JACKET);
+      p(4, 14, s, JACKET); p(11, 14, s, JACKET);
+      p(4, 15, s, GLOVE);  p(11, 15, s, GLOVE);
 
-      // Head
-      fillPixel(7, 10, s, HELM); fillPixel(8, 10, s, HELM);
-      fillPixel(6, 11, s, HELM); fillPixel(7, 11, s, HELM); fillPixel(8, 11, s, HELM); fillPixel(9, 11, s, HELM);
-      // goggles
-      fillPixel(7, 11, s, "rgba(0,0,0,0.55)");
-      fillPixel(8, 11, s, "rgba(0,0,0,0.55)");
-      // chin/face hint
-      fillPixel(7, 12, s, FACE);
+      p(7, 10, s, HELM); p(8, 10, s, HELM);
+      p(6, 11, s, HELM); p(7, 11, s, HELM); p(8, 11, s, HELM); p(9, 11, s, HELM);
+      p(7, 11, s, "rgba(0,0,0,0.55)");
+      p(8, 11, s, "rgba(0,0,0,0.55)");
+      p(7, 12, s, FACE);
 
       ctx.restore();
     }
@@ -613,28 +589,27 @@
       }
 
       // powder
-      for (const p of snowFX) {
-        const a = 1 - (p.t / p.life);
+      for (const fx of snowFX) {
+        const a = 1 - (fx.t / fx.life);
         ctx.fillStyle = `rgba(255,255,255,${0.7 * a})`;
-        ctx.fillRect(p.x, p.y, 2, 2);
+        ctx.fillRect(fx.x, fx.y, 2, 2);
       }
 
       // player
       ctx.save();
       ctx.translate(player.x, player.y);
 
-      // Base aim is where you point (dir vector). Downhill is "forward".
       const aim = Math.atan2(player.dirY, player.dirX);
 
-      // Rotate whole snowboarder with aim (so rider follows board direction),
-      // plus flip spin.
-      const baseRot = (aim - Math.PI / 2);
+      // IMPORTANT CHANGE:
+      // Flip the whole rider 180 degrees so they face uphill visually.
+      const baseRot = (aim - Math.PI / 2) + Math.PI;
+
       const rot = baseRot + player.spin * 0.35;
       ctx.rotate(rot);
 
       const crashed = game.state === "crash";
 
-      // trick ring
       if (game.trick.active && !crashed) {
         const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
         ctx.strokeStyle = game.trick.required === "up" ? "rgba(140,255,170,0.9)" : "rgba(255,200,120,0.9)";
@@ -649,7 +624,6 @@
       drawSnowboarder8bit(crashed);
       ctx.restore();
 
-      // game over
       if (!game.running) {
         ctx.save();
         ctx.fillStyle = "rgba(0,0,0,0.45)";
