@@ -66,7 +66,7 @@
     <button class="btn" id="restartBtn">Restart</button>
   </div>
   <div class="toast" id="toast"></div>
-  <div class="footerTip">Drag to steer. You only move downhill when your board points downhill. Mogul swipe up = backflip, down = frontflip. Rails grind. Halfpipes pop.</div>
+  <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only crash on a bad landing (not pointing downhill).</div>
   <canvas id="c"></canvas>
 
 <script>
@@ -167,14 +167,19 @@
   window.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
-  // Camera (the secret sauce)
+  // Camera
   const camera = {
-    x: 0,         // world units
-    y: 0,         // we keep your existing scroll via camera.y
-    follow: 0.12, // smoothing
+    x: 0,
+    y: 0,
+    follow: 0.12,
   };
 
-  // Game state
+  // Tuning knobs for the new landing-based crash system
+  const DOWNHILL_THRESH_MOVE = 0.25; // must be pointing downhill to move much
+  const DOWNHILL_THRESH_LAND = 0.18; // must be pointing downhill on landing or crash
+  const AIR_SPEED_BOOST = 1.45;      // airborne makes you move faster downhill
+  const AIR_FORCE_MOVE = 0.90;       // airborne reduces "stopping" in the air
+
   const game = {
     running: true,
     time: 0,
@@ -187,14 +192,14 @@
     crashT: 0,
 
     grind: { active:false, until:0, railId:null, t:0 },
-    trick: { active:false, until:0, mogulId:null, required:null, resolved:false },
+
+    // Trick is now optional during airtime (no required direction)
+    trick: { active:false, done:false, type:null },
   };
 
-  // Player lives in world space (wx, wy). We keep wy fixed (screen anchor),
-  // and the camera handles the endless mountain.
   const player = {
     wx: 0,
-    wy: H() * 0.70,   // screen anchor (not world)
+    wy: H() * 0.70,
     r: 14,
 
     vx: 0,
@@ -208,7 +213,7 @@
     moveFactor: 0,
   };
 
-  // World objects are in world coordinates: (x,y)
+  // World objects (world coords)
   let nextId = 1;
   const moguls = [];
   const rocks = [];
@@ -217,11 +222,11 @@
   const halfpipes = [];
   const snowFX = [];
 
-  // Convert world to screen
+  // World to screen
   function sx(worldX) { return worldX - camera.x + W() * 0.5; }
-  function sy(worldY) { return worldY + camera.y; } // camera.y works like your old scrollY
+  function sy(worldY) { return worldY + camera.y; }
 
-  // Spawn helpers (spawn around current camera x center)
+  // Spawns around camera.x center
   function spawnMogul(worldY) {
     moguls.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(18, 26), used:false });
   }
@@ -255,7 +260,7 @@
     }
   }
 
-  // Distance to segment (screen coords)
+  // Point to segment distance
   function distPointSeg(px, py, x1, y1, x2, y2) {
     const vx = x2 - x1, vy = y2 - y1;
     const wx = px - x1, wy = py - y1;
@@ -268,17 +273,39 @@
     return Math.hypot(px - bx, py - by);
   }
 
-  function beginTrickWindow(mogulId) {
+  function crash(reason) {
+    if (game.state === "crash") return;
+    game.state = "crash";
+    game.crashT = 0;
+    game.grind.active = false;
+    game.trick.active = false;
+    game.trick.done = false;
+    game.trick.type = null;
+    game.combo = 1;
+
+    addPowder(W()*0.5, player.wy, 28);
+    showToast(reason || "Wipeout");
+  }
+
+  // Launch into airtime (mogul/halfpipe/jump)
+  function launch(kind) {
+    // airtime always happens
+    player.airborne = Math.max(player.airborne, kind === "halfpipe" ? 0.85 : 0.65);
+    // open optional trick window
     game.trick.active = true;
-    game.trick.resolved = false;
-    game.trick.mogulId = mogulId;
-    game.trick.required = Math.random() < 0.5 ? "up" : "down";
-    game.trick.until = performance.now() + 450;
-    showToast(game.trick.required === "up" ? "Swipe up - backflip" : "Swipe down - frontflip");
+    game.trick.done = false;
+    game.trick.type = null;
+
+    // cancel grind if you pop
+    game.grind.active = false;
+
+    addPowder(W()*0.5, player.wy + 10, 18);
+    showToast(kind === "halfpipe" ? "Air - halfpipe" : "Air - mogul");
   }
 
   function handleSwipe(dx, dy, dtMs) {
-    if (!game.trick.active || game.trick.resolved) return;
+    // Only allow a trick while airborne and only once per airtime
+    if (!game.trick.active || game.trick.done || player.airborne <= 0.01) return;
 
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
@@ -287,46 +314,20 @@
     if (absY < absX * 1.2) return;
 
     const dir = dy < 0 ? "up" : "down";
-    const needed = game.trick.required;
+    game.trick.done = true;
+    game.trick.type = (dir === "up") ? "backflip" : "frontflip";
 
-    if (dir === needed) {
-      game.trick.resolved = true;
-      game.trick.active = false;
+    // scoring
+    const base = (dir === "up") ? 110 : 90;
+    const bonus = (game.combo - 1) * 30;
+    game.score += base + bonus;
+    game.combo = Math.min(20, game.combo + 1);
+    game.bestCombo = Math.max(game.bestCombo, game.combo);
 
-      const base = 100;
-      const bonus = (game.combo - 1) * 35;
-      game.score += base + bonus;
-      game.combo = Math.min(20, game.combo + 1);
-      game.bestCombo = Math.max(game.bestCombo, game.combo);
+    // spin direction
+    player.spinDir = (dir === "up") ? 1 : -1;
 
-      player.airborne = 0.55;
-      player.spinDir = (dir === "up") ? 1 : -1;
-
-      addPowder(W()*0.5, player.wy + 10, 18);
-      showToast(dir === "up" ? "Backflip" : "Frontflip");
-    } else {
-      crash("Wrong flip");
-    }
-  }
-
-  function crash(reason) {
-    if (game.state === "crash") return;
-    game.state = "crash";
-    game.crashT = 0;
-    game.trick.active = false;
-    game.trick.resolved = true;
-    game.grind.active = false;
-    game.combo = 1;
-
-    addPowder(W()*0.5, player.wy, 28);
-
-    const msg =
-      reason === "Rock" ? "Rocked" :
-      reason === "Tree" ? "Tree'd" :
-      reason === "Wrong flip" ? "Wrong flip" :
-      reason === "No swipe" ? "No swipe" :
-      "Wipeout";
-    showToast(msg);
+    showToast(dir === "up" ? "Backflip" : "Frontflip");
   }
 
   function startGrind(rail) {
@@ -338,17 +339,10 @@
     showToast("Grind");
   }
 
-  function triggerHalfpipe(pipe) {
-    pipe.usedUntil = performance.now() + 1400;
-    player.airborne = Math.max(player.airborne, 0.75);
-    addPowder(W()*0.5, player.wy + 10, 22);
-    game.score += 80 + (game.combo - 1) * 10;
-    showToast("Halfpipe pop");
-  }
-
   function reset() {
     game.running = true;
     game.time = 0;
+
     camera.x = 0;
     camera.y = 0;
 
@@ -358,10 +352,11 @@
     game.bestCombo = 1;
     game.state = "ride";
     game.crashT = 0;
-    game.trick.active = false;
-    game.trick.resolved = false;
+
     game.grind.active = false;
-    game.grind.t = 0;
+    game.trick.active = false;
+    game.trick.done = false;
+    game.trick.type = null;
 
     player.wx = 0;
     player.wy = H() * 0.70;
@@ -381,14 +376,13 @@
     halfpipes.length = 0;
     snowFX.length = 0;
 
-    // Seed world ahead (worldY is negative "up the hill", and increases as you move down)
     for (let i = 0; i < 10; i++) spawnMogul(-i * 240 - 200);
     for (let i = 0; i < 4; i++) spawnRock(-i * 520 - 450);
     for (let i = 0; i < 10; i++) spawnTree(-i * 240 - 250);
     for (let i = 0; i < 6; i++) spawnRail(-i * 520 - 350);
     for (let i = 0; i < 5; i++) spawnHalfpipe(-i * 680 - 600);
 
-    showToast("Endless mountain");
+    showToast("Clean runs only");
   }
 
   ui.restart.addEventListener("click", reset);
@@ -398,39 +392,29 @@
     if (!game.running) return;
     game.time += dt;
 
-    // target steer input is now a "desired screen X", but we convert it into world movement.
-    // The player is rendered at screen center, so "dragging left/right" effectively pushes camera.x.
+    // Lateral intent
     let targetScreenX = input.x;
     if (!input.active) {
       targetScreenX = (W() * 0.5)
         + (keys["arrowleft"] ? -220 : 0)
         + (keys["arrowright"] ? 220 : 0);
     }
-
-    // How far from center is your finger? That becomes lateral intent.
     const center = W() * 0.5;
     const intent = clamp((targetScreenX - center) / (W() * 0.35), -1, 1);
 
-    // Convert intent into world lateral movement (player.wx) and thus camera.x.
-    // Small smoothing keeps it SkiFree-y.
-    const lateralSpeed = 320; // world units per second
+    // World lateral movement
+    const lateralSpeed = 320;
     player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
     player.wx += player.vx * dt;
 
-    // Direction vector from intent + finger Y (for downhill gating)
-    let dirX = intent;
-    let dirY = 1;
+    // Direction vector for downhill gating
+    let dirX = intent, dirY = 1;
+
     if (input.active) {
-      // Use finger Y to allow "not pointing downhill" behavior
-      const dy = input.y - player.wy;
-      // If finger is above player, you are pointing uphill, reduce downhill
+      const dy = input.y - player.wy; // finger below = positive
       dirY = clamp(dy / 220, -1, 1);
-      // normalize-ish
       const len = Math.hypot(dirX, dirY) || 1;
       dirX /= len; dirY /= len;
-      // convert dirY to "downhill positive" like before
-      // finger below => positive dirY, finger above => negative
-      // We already did that via dy sign.
     } else {
       const len = Math.hypot(dirX, 1) || 1;
       dirX /= len; dirY = 1 / len;
@@ -440,36 +424,40 @@
 
     game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
-    // Downhill gating (only move camera.y when board points down)
+    // Base downhill movement factor
     const downhillAlign = player.dirY;
-    const THRESH = 0.25;
     let moveFactor = 0;
-    if (downhillAlign > THRESH) {
-      moveFactor = (downhillAlign - THRESH) / (1 - THRESH);
+    if (downhillAlign > DOWNHILL_THRESH_MOVE) {
+      moveFactor = (downhillAlign - DOWNHILL_THRESH_MOVE) / (1 - DOWNHILL_THRESH_MOVE);
       moveFactor = moveFactor * moveFactor;
     }
+
+    // Airborne rules:
+    // - you keep moving and you go faster
+    const airborneNow = player.airborne > 0.01;
+    if (airborneNow) moveFactor = Math.max(moveFactor, AIR_FORCE_MOVE);
     if (game.grind.active) moveFactor = Math.max(moveFactor, 0.85);
+
     player.moveFactor = moveFactor;
 
-    // camera.y increases as you go down (like old scrollY)
-    const scrollSpeed = game.speed * game.speedMul * moveFactor;
+    const airBoost = airborneNow ? AIR_SPEED_BOOST : 1.0;
+    const scrollSpeed = game.speed * game.speedMul * moveFactor * airBoost;
     camera.y += scrollSpeed * dt;
 
-    // Camera follows player.wx smoothly so mountain feels endless.
-    // This is the key: you drift in world space, camera follows, everything shifts.
-    camera.x += (player.wx - camera.x) * clamp(camera.follow + dt * 0.0, 0, 1);
+    // Camera follow
+    camera.x += (player.wx - camera.x) * clamp(camera.follow, 0, 1);
 
-    // Smooth carve signal for sprite pose
+    // Smooth carve for sprite
     const rawCarve = clamp(player.dirX / 0.9, -1, 1);
     player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
 
-    // Swipes for tricks
+    // Swipes during airtime
     if (input.justSwiped) {
       handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
       input.justSwiped = false;
     }
 
-    // Maintain population ahead of camera
+    // Spawn/cull
     const topWorld = -camera.y - 140;
     const bottomWorld = -camera.y + H() + 320;
 
@@ -486,9 +474,6 @@
     }
     cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
 
-    // Trick window timeout
-    if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) crash("No swipe");
-
     // Grind scoring
     if (game.grind.active) {
       game.grind.t += dt;
@@ -496,46 +481,45 @@
       if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    // Collisions and interactions happen in screen space using sx, sy
+    // Collisions and interactions (screen space)
     if (game.state !== "crash") {
-      // Rocks
+      // Rocks stop you (crash)
       for (const rock of rocks) {
         const rx = sx(rock.x);
         const ry = sy(rock.y);
-        if (ry < -100 || ry > H() + 100) continue;
+        if (ry < -120 || ry > H() + 120) continue;
         const rr = (player.r + rock.r) * 0.95;
-        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rock"); break; }
+        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rocked"); break; }
       }
 
-      // Trees
+      // Trees stop you (crash)
       if (game.state !== "crash") {
         for (const t of trees) {
           const tx = sx(t.x);
           const ty = sy(t.y);
-          if (ty < -120 || ty > H() + 120) continue;
+          if (ty < -140 || ty > H() + 140) continue;
           const rr = (player.r + t.r) * 0.90;
-          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { crash("Tree"); break; }
+          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { crash("Tree'd"); break; }
         }
       }
 
-      // Moguls
+      // Moguls launch (no crash)
       if (game.state !== "crash") {
         for (const m of moguls) {
           const mx = sx(m.x);
           const my = sy(m.y);
-          if (my < -120 || my > H() + 120) continue;
+          if (my < -140 || my > H() + 140) continue;
           const rr = (player.r + m.r) * 0.95;
           if (!m.used && dist2(W()*0.5, player.wy, mx, my) <= rr * rr) {
             m.used = true;
-            beginTrickWindow(m.id);
-            addPowder(W()*0.5, player.wy + 8, 12);
+            launch("mogul");
             break;
           }
         }
       }
 
-      // Rails (grind)
-      if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35) {
+      // Rails grind
+      if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
         for (const r of rails) {
           if (performance.now() < r.usedUntil) continue;
 
@@ -552,7 +536,7 @@
           const y2 = cy + dy * 0.5;
 
           const d = distPointSeg(W()*0.5, player.wy, x1, y1, x2, y2);
-          if (d < 14 && player.airborne <= 0.02) {
+          if (d < 14) {
             startGrind(r);
             addPowder(W()*0.5, player.wy + 10, 14);
             break;
@@ -560,7 +544,7 @@
         }
       }
 
-      // Halfpipes (pop)
+      // Halfpipes launch (no crash)
       if (game.state !== "crash") {
         for (const hp of halfpipes) {
           if (performance.now() < hp.usedUntil) continue;
@@ -575,20 +559,38 @@
           const bottom = hy + hp.h * 0.6;
 
           if (W()*0.5 > left && W()*0.5 < right && player.wy > top && player.wy < bottom) {
-            triggerHalfpipe(hp);
+            hp.usedUntil = performance.now() + 1400;
+            launch("halfpipe");
             break;
           }
         }
       }
     }
 
-    // Airborne spin
+    // Airborne update + landing check
+    const wasAirborne = player.airborne > 0.01;
+
     if (player.airborne > 0) {
       player.airborne = Math.max(0, player.airborne - dt);
+      // spin only if you tricked (spinDir set by swipe)
       player.spin += player.spinDir * dt * 10.5;
     } else {
       player.spin = 0;
       player.spinDir = 0;
+    }
+
+    const landedNow = wasAirborne && player.airborne <= 0.01;
+    if (landedNow && game.state !== "crash") {
+      // Close trick window on landing
+      game.trick.active = false;
+
+      // Bad landing rule: if you're not pointed downhill, you crash
+      if (player.dirY <= DOWNHILL_THRESH_LAND) {
+        crash("Bad landing");
+      } else {
+        // clean landing, no penalty (and no forced trick)
+        showToast(game.trick.done ? "Landed" : "Clean landing");
+      }
     }
 
     // Particles
@@ -612,11 +614,11 @@
 
     ui.score.textContent = `Score: ${Math.floor(game.score)}`;
     ui.combo.textContent = `Combo: x${game.combo}`;
-    ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor).toFixed(1)}`;
+    ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor * airBoost).toFixed(1)}`;
     ui.cam.textContent = `X: ${Math.round(camera.x)}`;
   }
 
-  // Sprite
+  // Sprite pixels
   function px(x, y, s, color) {
     ctx.fillStyle = color;
     ctx.fillRect(x * s, y * s, s, s);
@@ -708,14 +710,14 @@
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, W(), H());
 
-    // subtle bands
+    // Subtle slope bands
     for (let i = 0; i < 9; i++) {
       const y = (i / 9) * H();
       ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
       ctx.fillRect(0, y, W(), H() / 9);
     }
 
-    // halfpipes
+    // Halfpipes
     for (const hp of halfpipes) {
       const hx = sx(hp.x);
       const hy = sy(hp.y);
@@ -736,7 +738,7 @@
       ctx.restore();
     }
 
-    // rails
+    // Rails
     for (const r of rails) {
       const cx = sx(r.x);
       const cy = sy(r.y);
@@ -765,7 +767,7 @@
       ctx.restore();
     }
 
-    // rocks
+    // Rocks
     for (const rock of rocks) {
       const rx = sx(rock.x);
       const ry = sy(rock.y);
@@ -779,7 +781,7 @@
       ctx.restore();
     }
 
-    // trees
+    // Trees
     for (const t of trees) {
       const tx = sx(t.x);
       const ty = sy(t.y);
@@ -823,7 +825,7 @@
       ctx.restore();
     }
 
-    // moguls
+    // Moguls
     for (const m of moguls) {
       const mx = sx(m.x);
       const my = sy(m.y);
@@ -837,43 +839,35 @@
       ctx.restore();
     }
 
-    // powder
+    // Powder particles
     for (const fx of snowFX) {
       const a = 1 - (fx.t / fx.life);
       ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
       ctx.fillRect(fx.x, fx.y, 2, 2);
     }
 
-    // player at screen center X
+    // Player at screen center X
     ctx.save();
     ctx.translate(W()*0.5, player.wy);
 
     const aim = Math.atan2(player.dirY, player.dirX);
-    const baseRot = (aim - Math.PI / 2) + Math.PI; // uphill-facing
+    const baseRot = (aim - Math.PI / 2) + Math.PI; // uphill facing
     const rot = baseRot + player.spin * 0.35;
     ctx.rotate(rot);
 
-    if (game.grind.active && game.state !== "crash") {
-      ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = "rgba(0,0,0,0.18)";
+    // Simple ring when airborne to show "airtime mode"
+    if (player.airborne > 0.01 && game.state !== "crash") {
+      ctx.globalAlpha = 0.25;
+      ctx.strokeStyle = "rgba(0,0,0,0.20)";
       ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(0, 0, player.r + 10, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, player.r + 12, 0, Math.PI*2); ctx.stroke();
       ctx.globalAlpha = 1;
-    }
-
-    if (game.trick.active && game.state !== "crash") {
-      const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
-      ctx.strokeStyle = game.trick.required === "up" ? "rgba(20,160,80,0.45)" : "rgba(220,140,40,0.45)";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(0, 0, player.r + 12, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
-      ctx.stroke();
     }
 
     drawSnowboarder8bit(game.state === "crash");
     ctx.restore();
 
-    // game over
+    // Game over overlay
     if (!game.running) {
       ctx.save();
       ctx.fillStyle = "rgba(255,255,255,0.78)";
