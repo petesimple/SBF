@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no" />
   <link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#ffffff" />
-<link rel="apple-touch-icon" href="icon-192.png" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="theme-color" content="#ffffff" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <title>Snowboard Free</title>
   <style>
     html, body { height: 100%; margin: 0; background: #ffffff; overflow: hidden; }
@@ -194,10 +194,10 @@
       <div class="badge" id="comboBadge">Combo: x1</div>
       <div class="badge" id="speedBadge">Speed: 0.0</div>
       <div class="badge" id="camBadge">X: 0</div>
+      <div class="badge" id="yetiBadge" style="display:none;">Yeti: sniffing...</div>
     </div>
 
     <div class="right">
-      <!-- Put your logo file in the repo as logo.png -->
       <button class="logoBtn" id="logoBtn" aria-label="Share Snowboard Free">
         <img class="logoImg" id="logoImg" src="logo.png" alt="Snowboard Free logo" />
       </button>
@@ -206,9 +206,8 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only crash on a bad landing (not pointing downhill).</div>
+  <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only crash on a bad landing (not pointing downhill). If you biff and keep riding... the Yeti smells blood.</div>
 
-  <!-- Share modal -->
   <div class="modalBackdrop" id="shareBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
       <div class="modalHeader">
@@ -217,7 +216,6 @@
       </div>
 
       <div class="qrWrap">
-        <!-- Put your QR image in the repo as SBF-QR.png -->
         <img class="qrImg" id="qrImg" src="SBF-QR.png" alt="QR code to share the game" />
       </div>
 
@@ -249,6 +247,7 @@
     combo: document.getElementById("comboBadge"),
     speed: document.getElementById("speedBadge"),
     cam: document.getElementById("camBadge"),
+    yeti: document.getElementById("yetiBadge"),
     toast: document.getElementById("toast"),
     restart: document.getElementById("restartBtn"),
 
@@ -261,6 +260,17 @@
   };
 
   ui.shareLink.value = GAME_URL;
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
+
+  function showToast(text) {
+    ui.toast.textContent = text;
+    ui.toast.classList.add("show");
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 750);
+  }
 
   function openShare() {
     ui.shareBackdrop.classList.add("show");
@@ -283,7 +293,6 @@
   });
 
   ui.shareBackdrop.addEventListener("click", (e) => {
-    // close if clicking the dim background, not the modal itself
     if (e.target === ui.shareBackdrop) closeShare();
   });
 
@@ -296,7 +305,6 @@
       await navigator.clipboard.writeText(GAME_URL);
       showToast("Copied link");
     } catch {
-      // fallback
       ui.shareLink.focus();
       ui.shareLink.select();
       try {
@@ -334,17 +342,6 @@
   window.addEventListener("resize", fitCanvas);
   fitCanvas();
 
-  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-  function rand(a, b) { return a + Math.random() * (b - a); }
-  function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
-
-  function showToast(text) {
-    ui.toast.textContent = text;
-    ui.toast.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 650);
-  }
-
   // Input
   const input = {
     active: false,
@@ -366,9 +363,7 @@
   }
 
   function onPointerDown(e) {
-    // If share modal is open, don't control the rider
     if (ui.shareBackdrop.classList.contains("show")) return;
-
     e.preventDefault();
     const p = pointerPos(e);
     input.active = true;
@@ -417,6 +412,16 @@
   const AIR_SPEED_BOOST = 1.45;
   const AIR_FORCE_MOVE = 0.90;
 
+  // Yeti chase tuning
+  const YETI_ESCAPE_SECONDS = 30;
+  const YETI_SPAWN_DELAY = 1.0;      // seconds after biff before he appears
+  const YETI_BASE_SPEED = 140;       // world units per second
+  const YETI_RAMP = 110;             // speed adds over time
+  const YETI_CATCH_DIST = 58;        // world distance to catch
+  const BLOOD_SECONDS = 12;          // how long you leave a trail
+  const BLOOD_DROP_EVERY = 0.12;     // seconds between trail drops
+  const BLOOD_MAX_POINTS = 220;
+
   const game = {
     running: true,
     time: 0,
@@ -425,8 +430,14 @@
     score: 0,
     combo: 1,
     bestCombo: 1,
-    state: "ride",
+    state: "ride", // ride | stopcrash | win
     crashT: 0,
+
+    // biff + yeti
+    biffed: false,
+    biffT: 0,
+    bleed: { active:false, t:0, dropT:0, points:[] }, // points in world coords
+    yeti: { active:false, t:0, x:0, y:0, spawnT:0, escaped:false, caught:false },
 
     grind: { active:false, until:0, railId:null, t:0 },
     trick: { active:false, done:false, type:null },
@@ -447,7 +458,6 @@
     carve: 0,
     moveFactor: 0,
 
-    // visual bank angle used by the sprite
     visualYaw: 0,
   };
 
@@ -460,9 +470,10 @@
   const halfpipes = [];
   const snowFX = [];
 
-  // World to screen
+  // World <-> screen
   function sx(worldX) { return worldX - camera.x + W() * 0.5; }
   function sy(worldY) { return worldY + camera.y; }
+  function playerWorldY() { return player.wy - camera.y; } // screen->world
 
   function spawnMogul(worldY) {
     moguls.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(18, 26), used:false });
@@ -518,9 +529,9 @@
     return Math.hypot(px - bx, py - by);
   }
 
-  function crash(reason) {
-    if (game.state === "crash") return;
-    game.state = "crash";
+  function stopCrash(reason) {
+    if (game.state === "stopcrash") return;
+    game.state = "stopcrash";
     game.crashT = 0;
     game.grind.active = false;
     game.trick.active = false;
@@ -528,8 +539,45 @@
     game.trick.type = null;
     game.combo = 1;
 
-    addPowder(W()*0.5, player.wy, 28);
+    addPowder(W()*0.5, player.wy, 34);
     showToast(reason || "Wipeout");
+  }
+
+  function biff(reason) {
+    // A biff does NOT stop you. It just makes you "hurt" and starts the Yeti chase.
+    game.biffed = true;
+    game.biffT = 0;
+    game.combo = 1;
+
+    // bleeding trail
+    game.bleed.active = true;
+    game.bleed.t = 0;
+    game.bleed.dropT = 0;
+    // keep some previous points (optional) but cap
+    if (game.bleed.points.length > 40) game.bleed.points.splice(0, game.bleed.points.length - 40);
+
+    // schedule yeti
+    game.yeti.active = false;
+    game.yeti.t = 0;
+    game.yeti.spawnT = YETI_SPAWN_DELAY;
+    game.yeti.escaped = false;
+    game.yeti.caught = false;
+
+    addPowder(W()*0.5, player.wy, 20);
+    showToast(reason || "Biffed - keep moving");
+  }
+
+  function spawnYeti() {
+    const py = playerWorldY();
+    game.yeti.active = true;
+    game.yeti.t = 0;
+
+    // spawn uphill/behind you (higher worldY), slightly off to the side
+    game.yeti.x = player.wx + rand(-160, 160);
+    game.yeti.y = py + 720;
+
+    ui.yeti.style.display = "inline-block";
+    showToast("Yeti smells blood...");
   }
 
   function launch(kind) {
@@ -589,6 +637,20 @@
     game.state = "ride";
     game.crashT = 0;
 
+    game.biffed = false;
+    game.biffT = 0;
+    game.bleed.active = false;
+    game.bleed.t = 0;
+    game.bleed.dropT = 0;
+    game.bleed.points.length = 0;
+
+    game.yeti.active = false;
+    game.yeti.t = 0;
+    game.yeti.spawnT = 0;
+    game.yeti.escaped = false;
+    game.yeti.caught = false;
+    ui.yeti.style.display = "none";
+
     game.grind.active = false;
     game.trick.active = false;
     game.trick.done = false;
@@ -629,6 +691,7 @@
     if (!game.running) return;
     game.time += dt;
 
+    // Lateral intent
     let targetScreenX = input.x;
     if (!input.active) {
       targetScreenX = (W() * 0.5)
@@ -638,13 +701,15 @@
     const center = W() * 0.5;
     const intent = clamp((targetScreenX - center) / (W() * 0.35), -1, 1);
 
+    // World lateral movement
     const lateralSpeed = 320;
     player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
     player.wx += player.vx * dt;
 
+    // Direction for downhill gating
     let dirX = intent, dirY = 1;
     if (input.active) {
-      const dy = input.y - player.wy;
+      const dy = input.y - player.wy; // finger below = positive
       dirY = clamp(dy / 220, -1, 1);
       const len = Math.hypot(dirX, dirY) || 1;
       dirX /= len; dirY /= len;
@@ -657,6 +722,7 @@
 
     game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
+    // Downhill movement factor
     const downhillAlign = player.dirY;
     let moveFactor = 0;
     if (downhillAlign > DOWNHILL_THRESH_MOVE) {
@@ -674,22 +740,27 @@
     const scrollSpeed = game.speed * game.speedMul * moveFactor * airBoost;
     camera.y += scrollSpeed * dt;
 
+    // Camera follow
     camera.x += (player.wx - camera.x) * clamp(camera.follow, 0, 1);
 
+    // Carve smoothing
     const rawCarve = clamp(player.dirX / 0.9, -1, 1);
     player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
 
+    // Sprite visual yaw: board + rider bank into carve when moving
     const absC = Math.abs(player.carve);
     const mv = player.moveFactor;
-    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
+    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC; // 45 to 90
     const yawMag = targetMoving * mv;
     player.visualYaw = -yawMag * Math.sign(player.carve || 1);
 
+    // Swipes during airtime
     if (input.justSwiped) {
       handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
       input.justSwiped = false;
     }
 
+    // Spawn/cull
     const topWorld = -camera.y - 140;
     const bottomWorld = -camera.y + H() + 320;
 
@@ -706,32 +777,37 @@
     }
     cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
 
+    // Grind scoring
     if (game.grind.active) {
       game.grind.t += dt;
       game.score += 30 * dt * Math.max(1, game.combo * 0.6);
       if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    if (game.state !== "crash") {
+    // Collisions/interactions (only if not hard stopped)
+    if (game.state !== "stopcrash") {
+      // Rocks stop you (hard crash)
       for (const rock of rocks) {
         const rx = sx(rock.x);
         const ry = sy(rock.y);
         if (ry < -120 || ry > H() + 120) continue;
         const rr = (player.r + rock.r) * 0.95;
-        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rocked"); break; }
+        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { stopCrash("Rocked"); break; }
       }
 
-      if (game.state !== "crash") {
+      // Trees stop you (hard crash)
+      if (game.state !== "stopcrash") {
         for (const t of trees) {
           const tx = sx(t.x);
           const ty = sy(t.y);
           if (ty < -140 || ty > H() + 140) continue;
           const rr = (player.r + t.r) * 0.90;
-          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { crash("Tree'd"); break; }
+          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { stopCrash("Tree'd"); break; }
         }
       }
 
-      if (game.state !== "crash") {
+      // Moguls launch
+      if (game.state !== "stopcrash") {
         for (const m of moguls) {
           const mx = sx(m.x);
           const my = sy(m.y);
@@ -745,7 +821,8 @@
         }
       }
 
-      if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
+      // Rails grind (no grind in air)
+      if (game.state !== "stopcrash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
         for (const r of rails) {
           if (performance.now() < r.usedUntil) continue;
 
@@ -770,7 +847,8 @@
         }
       }
 
-      if (game.state !== "crash") {
+      // Halfpipes launch
+      if (game.state !== "stopcrash") {
         for (const hp of halfpipes) {
           if (performance.now() < hp.usedUntil) continue;
 
@@ -791,6 +869,7 @@
       }
     }
 
+    // Airborne + landing check
     const wasAirborne = player.airborne > 0.01;
 
     if (player.airborne > 0) {
@@ -802,16 +881,111 @@
     }
 
     const landedNow = wasAirborne && player.airborne <= 0.01;
-    if (landedNow && game.state !== "crash") {
+
+    // Landing outcomes:
+    // - bad landing = BIFF (keep moving, bleeding, yeti timer starts)
+    // - good landing = normal
+    if (landedNow && game.state !== "stopcrash") {
       game.trick.active = false;
 
       if (player.dirY <= DOWNHILL_THRESH_LAND) {
-        crash("Bad landing");
+        biff("Biffed landing");
       } else {
         showToast(game.trick.done ? "Landed" : "Clean landing");
       }
     }
 
+    // Bleeding trail + yeti logic
+    if (game.biffed && game.state !== "stopcrash") {
+      game.biffT += dt;
+
+      // Start bleeding for a while (drops a trail in world space)
+      if (game.bleed.active) {
+        game.bleed.t += dt;
+        game.bleed.dropT += dt;
+
+        while (game.bleed.dropT >= BLOOD_DROP_EVERY) {
+          game.bleed.dropT -= BLOOD_DROP_EVERY;
+
+          const py = playerWorldY();
+          // tiny random "line segment" vibe
+          game.bleed.points.push({
+            x: player.wx + rand(-10, 10),
+            y: py + rand(-4, 4),
+            len: rand(10, 26),
+            ang: rand(-0.6, 0.6),
+            w: rand(2, 4),
+            a: rand(0.35, 0.75)
+          });
+
+          if (game.bleed.points.length > BLOOD_MAX_POINTS) {
+            game.bleed.points.splice(0, game.bleed.points.length - BLOOD_MAX_POINTS);
+          }
+        }
+
+        if (game.bleed.t >= BLOOD_SECONDS) {
+          game.bleed.active = false;
+        }
+      }
+
+      // Yeti spawn countdown
+      if (!game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
+        game.yeti.spawnT -= dt;
+        if (game.yeti.spawnT <= 0) spawnYeti();
+      }
+
+      // If yeti active, chase
+      if (game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
+        game.yeti.t += dt;
+
+        const pxw = player.wx;
+        const pyw = playerWorldY();
+
+        // Choose a blood target if available: the most recent point behind you a bit
+        let tx = pxw, ty = pyw;
+        if (game.bleed.points.length) {
+          const idx = Math.max(0, game.bleed.points.length - 1 - Math.floor(rand(0, 6)));
+          tx = game.bleed.points[idx].x;
+          ty = game.bleed.points[idx].y;
+        }
+
+        // Move toward target (mostly follows trail), but also pulls toward the player slightly
+        const blendToPlayer = 0.35;
+        tx = tx * (1 - blendToPlayer) + pxw * blendToPlayer;
+        ty = ty * (1 - blendToPlayer) + pyw * blendToPlayer;
+
+        const dx = tx - game.yeti.x;
+        const dy = ty - game.yeti.y;
+        const d = Math.hypot(dx, dy) || 1;
+
+        // Yeti speed ramps the longer he’s been chasing
+        const sp = YETI_BASE_SPEED + Math.min(1.0, game.yeti.t / 10) * YETI_RAMP;
+
+        // Move
+        game.yeti.x += (dx / d) * sp * dt;
+        game.yeti.y += (dy / d) * sp * dt;
+
+        // Catch check (use player pos)
+        const dc = Math.hypot(pxw - game.yeti.x, pyw - game.yeti.y);
+        if (dc <= YETI_CATCH_DIST) {
+          game.yeti.caught = true;
+          game.running = false;
+          showToast("YETI'D");
+        }
+
+        // Escape check
+        if (game.biffT >= YETI_ESCAPE_SECONDS) {
+          game.yeti.escaped = true;
+          game.yeti.active = false;
+          ui.yeti.style.display = "none";
+          showToast("Escaped the Yeti");
+        }
+      }
+    } else {
+      ui.yeti.style.display = "none";
+    }
+
+    // Particles
     for (let i = snowFX.length - 1; i >= 0; i--) {
       const p = snowFX[i];
       p.t += dt;
@@ -821,9 +995,10 @@
       if (p.t >= p.life) snowFX.splice(i, 1);
     }
 
-    if (game.state === "crash") {
+    // Hard crash stops the run after a short beat
+    if (game.state === "stopcrash") {
       game.crashT += dt;
-      if (game.crashT > 1.2) {
+      if (game.crashT > 1.0) {
         game.running = false;
         showToast("Wipeout - tap Restart");
       }
@@ -833,21 +1008,30 @@
     ui.combo.textContent = `Combo: x${game.combo}`;
     ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor * airBoost).toFixed(1)}`;
     ui.cam.textContent = `X: ${Math.round(camera.x)}`;
+
+    // Yeti HUD label
+    if (game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
+      const left = Math.max(0, Math.ceil(YETI_ESCAPE_SECONDS - game.biffT));
+      ui.yeti.style.display = "inline-block";
+      ui.yeti.textContent = `Yeti: ${left}s to outrun`;
+    }
   }
 
+  // Sprite pixels
   function px(x, y, s, color) {
     ctx.fillStyle = color;
     ctx.fillRect(x * s, y * s, s, s);
   }
 
-  function drawSnowboarder8bit(crashed) {
+  // Snowboarder
+  function drawSnowboarder8bit(isHurt) {
     const s = 2.3;
     const hop = (player.airborne > 0) ? -6 : 0;
 
     const OUT = "rgba(0,0,0,0.55)";
-    const HELM = crashed ? "rgba(255,120,150,0.95)" : "rgba(245,245,255,0.95)";
-    const FACE = "rgba(245,210,170,0.95)";
-    const JACKET = crashed ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
+    const HELM = isHurt ? "rgba(255,155,175,0.95)" : "rgba(245,245,255,0.95)";
+    const FACE = isHurt ? "rgba(255,185,190,0.95)" : "rgba(245,210,170,0.95)";
+    const JACKET = isHurt ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
     const PANTS = "rgba(60,90,140,0.95)";
     const GLOVE = "rgba(230,230,240,0.9)";
     const BOARD = "rgba(255,255,255,0.95)";
@@ -867,51 +1051,159 @@
     ctx.translate(-8 * s, (-18 * s) + hop);
     ctx.translate(stanceX * s, stanceY * s);
 
+    // board outline
     for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
     px(3, 19, s, OUT); px(12, 19, s, OUT);
 
+    // board fill
     for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
     for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
 
+    // tip highlights
     px(3, 20, s, "rgba(255,70,90,0.85)");
     px(12, 20, s, "rgba(90,180,255,0.85)");
 
+    // legs
     px(6, 18, s, OUT); px(9, 18, s, OUT);
     px(6, 17, s, PANTS); px(9, 17, s, PANTS);
-
     px(6, 16, s, PANTS); px(7, 16, s, PANTS); px(8, 16, s, PANTS); px(9, 16, s, PANTS);
     px(7, 15, s, PANTS); px(8, 15, s, PANTS);
 
+    // body
     px(6, 13, s, JACKET); px(7, 13, s, JACKET); px(8, 13, s, JACKET); px(9, 13, s, JACKET);
     px(6, 14, s, JACKET); px(7, 14, s, JACKET); px(8, 14, s, JACKET); px(9, 14, s, JACKET);
     px(7, 12, s, JACKET); px(8, 12, s, JACKET);
 
+    // arms
     px(5, 13, s, JACKET); px(10, 13, s, JACKET);
     px(4, 14, s, JACKET); px(11, 14, s, JACKET);
     px(4, 15, s, GLOVE);  px(11, 15, s, GLOVE);
 
+    // helmet/head
     px(7, 10, s, HELM); px(8, 10, s, HELM);
     px(6, 11, s, HELM); px(7, 11, s, HELM); px(8, 11, s, HELM); px(9, 11, s, HELM);
 
+    // goggles
     px(7, 11, s, "rgba(0,0,0,0.55)");
     px(8, 11, s, "rgba(0,0,0,0.55)");
     px(7, 12, s, FACE);
 
+    // tiny "blood smear" on rider when hurt
+    if (isHurt) {
+      px(9, 14, s, "rgba(190,10,25,0.75)");
+      px(6, 16, s, "rgba(190,10,25,0.55)");
+    }
+
     ctx.restore();
+  }
+
+  // Simple 8-bit yeti
+  function drawYeti8bit(worldX, worldY) {
+    const x = sx(worldX);
+    const y = sy(worldY);
+
+    // only draw if on-screen-ish
+    if (y < -240 || y > H() + 260) return;
+
+    const s = 2.4;
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    // tiny wobble
+    const wob = Math.sin(performance.now() / 120) * 0.12;
+    ctx.rotate(wob);
+
+    // shadow
+    ctx.fillStyle = "rgba(10,20,40,0.06)";
+    ctx.beginPath();
+    ctx.ellipse(0, 18, 26, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // pixel body
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(-12*s, -22*s);
+
+    const FUR1 = "rgba(255,255,255,0.95)";
+    const FUR2 = "rgba(10,20,40,0.10)";
+    const OUT = "rgba(0,0,0,0.45)";
+    const EYE = "rgba(0,0,0,0.70)";
+    const NOSE = "rgba(190,10,25,0.85)";
+
+    // body block
+    for (let yy = 6; yy <= 17; yy++) {
+      for (let xx = 6; xx <= 17; xx++) px(xx, yy, s, FUR1);
+    }
+    // shading
+    for (let yy = 10; yy <= 17; yy++) {
+      for (let xx = 6; xx <= 10; xx++) px(xx, yy, s, FUR2);
+    }
+    // arms
+    for (let yy = 9; yy <= 14; yy++) px(4, yy, s, FUR1);
+    for (let yy = 9; yy <= 14; yy++) px(19, yy, s, FUR1);
+    // outline bits
+    for (let xx = 6; xx <= 17; xx++) { px(xx, 6, s, OUT); px(xx, 17, s, OUT); }
+    for (let yy = 6; yy <= 17; yy++) { px(6, yy, s, OUT); px(17, yy, s, OUT); }
+
+    // head bump
+    for (let yy = 2; yy <= 7; yy++) for (let xx = 8; xx <= 15; xx++) px(xx, yy, s, FUR1);
+    for (let xx = 8; xx <= 15; xx++) px(xx, 2, s, OUT);
+
+    // eyes + nose
+    px(10, 5, s, EYE);
+    px(13, 5, s, EYE);
+    px(12, 6, s, NOSE);
+
+    ctx.restore();
+  }
+
+  function drawBloodTrail() {
+    if (!game.bleed.points.length) return;
+
+    // draw older first so newest looks strongest
+    for (let i = 0; i < game.bleed.points.length; i++) {
+      const p = game.bleed.points[i];
+      const x = sx(p.x);
+      const y = sy(p.y);
+      if (y < -80 || y > H() + 80) continue;
+
+      const a = p.a * (0.55 + 0.45 * (i / game.bleed.points.length));
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(p.ang);
+
+      ctx.strokeStyle = `rgba(185,10,25,${a})`;
+      ctx.lineWidth = p.w;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-p.len * 0.5, 0);
+      ctx.lineTo(p.len * 0.5, 0);
+      ctx.stroke();
+
+      // a couple droplets
+      ctx.fillStyle = `rgba(185,10,25,${a * 0.75})`;
+      ctx.fillRect(-1, -1, 2, 2);
+      if (Math.random() < 0.02) ctx.fillRect(3, 1, 2, 2);
+
+      ctx.restore();
+    }
   }
 
   function draw() {
     ctx.imageSmoothingEnabled = false;
 
+    // Snow base
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, W(), H());
 
+    // Subtle slope bands
     for (let i = 0; i < 9; i++) {
       const y = (i / 9) * H();
       ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
       ctx.fillRect(0, y, W(), H() / 9);
     }
 
+    // Halfpipes (rotated 90 degrees longways + various lips)
     for (const hp of halfpipes) {
       const hx = sx(hp.x);
       const hy = sy(hp.y);
@@ -947,6 +1239,7 @@
       ctx.restore();
     }
 
+    // Rails
     for (const r of rails) {
       const cx = sx(r.x);
       const cy = sy(r.y);
@@ -975,6 +1268,7 @@
       ctx.restore();
     }
 
+    // Rocks
     for (const rock of rocks) {
       const rx = sx(rock.x);
       const ry = sy(rock.y);
@@ -988,6 +1282,7 @@
       ctx.restore();
     }
 
+    // Trees (flipped 180)
     for (const t of trees) {
       const tx = sx(t.x);
       const ty = sy(t.y);
@@ -1032,6 +1327,7 @@
       ctx.restore();
     }
 
+    // Moguls
     for (const m of moguls) {
       const mx = sx(m.x);
       const my = sy(m.y);
@@ -1045,12 +1341,22 @@
       ctx.restore();
     }
 
+    // Blood trail (after biff)
+    drawBloodTrail();
+
+    // Powder particles
     for (const fx of snowFX) {
       const a = 1 - (fx.t / fx.life);
       ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
       ctx.fillRect(fx.x, fx.y, 2, 2);
     }
 
+    // Yeti (behind you in world space)
+    if (game.yeti.active && !game.yeti.caught && !game.yeti.escaped) {
+      drawYeti8bit(game.yeti.x, game.yeti.y);
+    }
+
+    // Player at screen center X
     ctx.save();
     ctx.translate(W()*0.5, player.wy);
 
@@ -1058,7 +1364,7 @@
     const spin = player.spin * 0.35;
     ctx.rotate(bank + spin);
 
-    if (player.airborne > 0.01 && game.state !== "crash") {
+    if (player.airborne > 0.01 && game.state !== "stopcrash") {
       ctx.globalAlpha = 0.22;
       ctx.strokeStyle = "rgba(0,0,0,0.20)";
       ctx.lineWidth = 3;
@@ -1066,20 +1372,32 @@
       ctx.globalAlpha = 1;
     }
 
-    drawSnowboarder8bit(game.state === "crash");
+    const isHurt = game.biffed && game.biffT < BLOOD_SECONDS;
+    drawSnowboarder8bit(isHurt || game.state === "stopcrash");
     ctx.restore();
 
+    // Game over overlay
     if (!game.running) {
       ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.fillStyle = "rgba(255,255,255,0.80)";
       ctx.fillRect(0, 0, W(), H());
       ctx.fillStyle = "rgba(10,20,35,0.95)";
       ctx.font = "800 30px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
-      ctx.fillText("Snowboard Free", W()*0.5, H()*0.40);
+      ctx.fillText("Snowboard Free", W()*0.5, H()*0.38);
+
       ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-      ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W()*0.5, H()*0.46);
-      ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.52);
+      ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W()*0.5, H()*0.44);
+
+      if (game.yeti.caught) {
+        ctx.fillText("The Yeti followed the blood trail...", W()*0.5, H()*0.50);
+      } else if (game.state === "stopcrash") {
+        ctx.fillText("That one stopped you.", W()*0.5, H()*0.50);
+      } else {
+        ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.50);
+      }
+
+      ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.56);
       ctx.restore();
     }
   }
@@ -1096,7 +1414,8 @@
 
 })();
 </script>
-  <script>
+
+<script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("./service-worker.js").catch(() => {});
