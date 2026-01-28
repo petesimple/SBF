@@ -14,13 +14,17 @@
       text-shadow: 0 1px 0 rgba(255,255,255,.9);
       display:flex; justify-content:space-between; gap: 10px;
       pointer-events:none;
+      z-index: 20;
     }
     .hud .left{ display:flex; flex-direction:column; gap:6px; }
+    .hud .right{ display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+
     .badge{
       display:inline-block; padding: 6px 10px; border-radius: 999px;
       background: rgba(255,255,255,.75); border: 1px solid rgba(0,0,0,.08);
       backdrop-filter: blur(6px);
     }
+
     .toast{
       position: fixed; left: 50%; top: 16%; transform: translateX(-50%);
       padding: 10px 14px; border-radius: 14px;
@@ -29,8 +33,10 @@
       pointer-events:none;
       opacity: 0; transition: opacity .18s ease;
       white-space: nowrap;
+      z-index: 15;
     }
     .toast.show{ opacity: 1; }
+
     .btn{
       pointer-events:auto;
       border: 1px solid rgba(0,0,0,.10);
@@ -41,6 +47,28 @@
       cursor: pointer;
     }
     .btn:active{ transform: translateY(1px); }
+
+    /* Logo button */
+    .logoBtn{
+      pointer-events:auto;
+      border: 1px solid rgba(0,0,0,.10);
+      background: rgba(255,255,255,.85);
+      border-radius: 14px;
+      padding: 6px;
+      cursor: pointer;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 10px 24px rgba(0,0,0,.10);
+    }
+    .logoBtn:active{ transform: translateY(1px); }
+    .logoImg{
+      display:block;
+      width: 64px;
+      height: 64px;
+      image-rendering: pixelated;
+    }
+
     .footerTip{
       position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
       color: rgba(10,20,35,.92);
@@ -52,6 +80,105 @@
       pointer-events:none;
       text-align:center;
       max-width: calc(100vw - 24px);
+      z-index: 10;
+    }
+
+    /* Share modal */
+    .modalBackdrop{
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.35);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      padding: 16px;
+      pointer-events: auto;
+    }
+    .modalBackdrop.show{ display:flex; }
+
+    .modal{
+      width: min(420px, calc(100vw - 32px));
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(0,0,0,.10);
+      border-radius: 18px;
+      box-shadow: 0 18px 60px rgba(0,0,0,.25);
+      backdrop-filter: blur(8px);
+      padding: 14px 14px 12px;
+      color:#111;
+      font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    .modalHeader{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .modalTitle{
+      font-weight: 800;
+      font-size: 16px;
+      letter-spacing: .2px;
+    }
+    .iconBtn{
+      border: 1px solid rgba(0,0,0,.10);
+      background: rgba(255,255,255,.9);
+      border-radius: 12px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    .iconBtn:active{ transform: translateY(1px); }
+
+    .qrWrap{
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      padding: 10px 0 6px;
+    }
+    .qrImg{
+      width: 240px;
+      height: 240px;
+      image-rendering: pixelated;
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,.10);
+      background: #fff;
+    }
+
+    .modalBody{
+      text-align:center;
+      margin-top: 6px;
+    }
+    .linkRow{
+      display:flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .linkInput{
+      flex: 1;
+      border: 1px solid rgba(0,0,0,.12);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,.95);
+      font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color:#111;
+      outline: none;
+    }
+    .smallBtn{
+      border: 1px solid rgba(0,0,0,.10);
+      background: rgba(255,255,255,.9);
+      border-radius: 12px;
+      padding: 10px 12px;
+      cursor:pointer;
+      font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      white-space: nowrap;
+    }
+    .smallBtn:active{ transform: translateY(1px); }
+
+    .hint{
+      margin-top: 8px;
+      color: rgba(20,30,45,.75);
+      font-size: 13px;
     }
   </style>
 </head>
@@ -63,14 +190,52 @@
       <div class="badge" id="speedBadge">Speed: 0.0</div>
       <div class="badge" id="camBadge">X: 0</div>
     </div>
-    <button class="btn" id="restartBtn">Restart</button>
+
+    <div class="right">
+      <!-- Put your logo file in the repo as logo.png -->
+      <button class="logoBtn" id="logoBtn" aria-label="Share Snowboard Free">
+        <img class="logoImg" id="logoImg" src="logo.png" alt="Snowboard Free logo" />
+      </button>
+      <button class="btn" id="restartBtn">Restart</button>
+    </div>
   </div>
+
   <div class="toast" id="toast"></div>
   <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only crash on a bad landing (not pointing downhill).</div>
+
+  <!-- Share modal -->
+  <div class="modalBackdrop" id="shareBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <div class="modalHeader">
+        <div class="modalTitle" id="shareTitle">Share Snowboard Free</div>
+        <button class="iconBtn" id="shareCloseBtn" aria-label="Close">Close</button>
+      </div>
+
+      <div class="qrWrap">
+        <!-- Put your QR image in the repo as SBF-QR.png -->
+        <img class="qrImg" id="qrImg" src="SBF-QR.png" alt="QR code to share the game" />
+      </div>
+
+      <div class="modalBody">
+        <div>Scan the QR code or copy the link and send it to a fellow shred goblin.</div>
+
+        <div class="linkRow">
+          <input class="linkInput" id="shareLink" value="https://petesimple.github.io/SBF/" readonly />
+          <button class="smallBtn" id="copyBtn">Copy</button>
+          <button class="smallBtn" id="nativeShareBtn">Share</button>
+        </div>
+
+        <div class="hint">Tap outside this box to close.</div>
+      </div>
+    </div>
+  </div>
+
   <canvas id="c"></canvas>
 
 <script>
 (() => {
+  const GAME_URL = "https://petesimple.github.io/SBF/";
+
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d", { alpha: false });
 
@@ -81,7 +246,75 @@
     cam: document.getElementById("camBadge"),
     toast: document.getElementById("toast"),
     restart: document.getElementById("restartBtn"),
+
+    logoBtn: document.getElementById("logoBtn"),
+    shareBackdrop: document.getElementById("shareBackdrop"),
+    shareCloseBtn: document.getElementById("shareCloseBtn"),
+    shareLink: document.getElementById("shareLink"),
+    copyBtn: document.getElementById("copyBtn"),
+    nativeShareBtn: document.getElementById("nativeShareBtn"),
   };
+
+  ui.shareLink.value = GAME_URL;
+
+  function openShare() {
+    ui.shareBackdrop.classList.add("show");
+    ui.shareBackdrop.setAttribute("aria-hidden", "false");
+  }
+  function closeShare() {
+    ui.shareBackdrop.classList.remove("show");
+    ui.shareBackdrop.setAttribute("aria-hidden", "true");
+  }
+
+  ui.logoBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openShare();
+  });
+
+  ui.shareCloseBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    closeShare();
+  });
+
+  ui.shareBackdrop.addEventListener("click", (e) => {
+    // close if clicking the dim background, not the modal itself
+    if (e.target === ui.shareBackdrop) closeShare();
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeShare();
+  });
+
+  ui.copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(GAME_URL);
+      showToast("Copied link");
+    } catch {
+      // fallback
+      ui.shareLink.focus();
+      ui.shareLink.select();
+      try {
+        document.execCommand("copy");
+        showToast("Copied link");
+      } catch {
+        showToast("Copy failed");
+      }
+    }
+  });
+
+  ui.nativeShareBtn.addEventListener("click", async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Snowboard Free", text: "Come shred this.", url: GAME_URL });
+        showToast("Shared");
+      } else {
+        showToast("Share not supported");
+      }
+    } catch {
+      showToast("Share cancelled");
+    }
+  });
 
   const W = () => window.innerWidth;
   const H = () => window.innerHeight;
@@ -128,6 +361,9 @@
   }
 
   function onPointerDown(e) {
+    // If share modal is open, don't control the rider
+    if (ui.shareBackdrop.classList.contains("show")) return;
+
     e.preventDefault();
     const p = pointerPos(e);
     input.active = true;
@@ -240,7 +476,6 @@
   function spawnHalfpipe(worldY) {
     const w = rand(170, 260);
     const h = rand(60, 95);
-    // lips (various)
     const lipA = rand(0.6, 1.25);
     const lipB = rand(0.6, 1.25);
     halfpipes.push({
@@ -389,7 +624,6 @@
     if (!game.running) return;
     game.time += dt;
 
-    // Lateral intent
     let targetScreenX = input.x;
     if (!input.active) {
       targetScreenX = (W() * 0.5)
@@ -399,15 +633,13 @@
     const center = W() * 0.5;
     const intent = clamp((targetScreenX - center) / (W() * 0.35), -1, 1);
 
-    // World lateral movement
     const lateralSpeed = 320;
     player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
     player.wx += player.vx * dt;
 
-    // Direction for downhill gating
     let dirX = intent, dirY = 1;
     if (input.active) {
-      const dy = input.y - player.wy; // finger below = positive
+      const dy = input.y - player.wy;
       dirY = clamp(dy / 220, -1, 1);
       const len = Math.hypot(dirX, dirY) || 1;
       dirX /= len; dirY /= len;
@@ -420,7 +652,6 @@
 
     game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
-    // Downhill movement factor
     const downhillAlign = player.dirY;
     let moveFactor = 0;
     if (downhillAlign > DOWNHILL_THRESH_MOVE) {
@@ -438,27 +669,22 @@
     const scrollSpeed = game.speed * game.speedMul * moveFactor * airBoost;
     camera.y += scrollSpeed * dt;
 
-    // Camera follow
     camera.x += (player.wx - camera.x) * clamp(camera.follow, 0, 1);
 
-    // Carve smoothing
     const rawCarve = clamp(player.dirX / 0.9, -1, 1);
     player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
 
-    // Sprite visual yaw: board + rider bank into carve when moving
     const absC = Math.abs(player.carve);
     const mv = player.moveFactor;
-    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC; // 45 to 90
+    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
     const yawMag = targetMoving * mv;
-    player.visualYaw = -yawMag * Math.sign(player.carve || 1); // bank direction
+    player.visualYaw = -yawMag * Math.sign(player.carve || 1);
 
-    // Swipes during airtime
     if (input.justSwiped) {
       handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
       input.justSwiped = false;
     }
 
-    // Spawn/cull
     const topWorld = -camera.y - 140;
     const bottomWorld = -camera.y + H() + 320;
 
@@ -475,16 +701,13 @@
     }
     cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
 
-    // Grind scoring
     if (game.grind.active) {
       game.grind.t += dt;
       game.score += 30 * dt * Math.max(1, game.combo * 0.6);
       if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    // Collisions/interactions
     if (game.state !== "crash") {
-      // Rocks stop you
       for (const rock of rocks) {
         const rx = sx(rock.x);
         const ry = sy(rock.y);
@@ -493,7 +716,6 @@
         if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { crash("Rocked"); break; }
       }
 
-      // Trees stop you
       if (game.state !== "crash") {
         for (const t of trees) {
           const tx = sx(t.x);
@@ -504,7 +726,6 @@
         }
       }
 
-      // Moguls launch
       if (game.state !== "crash") {
         for (const m of moguls) {
           const mx = sx(m.x);
@@ -519,7 +740,6 @@
         }
       }
 
-      // Rails grind (no grind in air)
       if (game.state !== "crash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
         for (const r of rails) {
           if (performance.now() < r.usedUntil) continue;
@@ -545,7 +765,6 @@
         }
       }
 
-      // Halfpipes launch (rotated 90 degrees longways)
       if (game.state !== "crash") {
         for (const hp of halfpipes) {
           if (performance.now() < hp.usedUntil) continue;
@@ -554,10 +773,8 @@
           const hy = sy(hp.y);
           if (hy < -240 || hy > H() + 260) continue;
 
-          // collision as ellipse (rotated look, but ellipse handles it fine)
-          // since the pipe is "longways", major axis is along screen Y:
-          const a = hp.h * 1.05;      // x-radius (narrow)
-          const b = hp.w * 0.32;      // y-radius (long)
+          const a = hp.h * 1.05;
+          const b = hp.w * 0.32;
           const px = (W()*0.5 - hx) / a;
           const py = (player.wy - hy) / b;
           if ((px*px + py*py) <= 1.0) {
@@ -569,7 +786,6 @@
       }
     }
 
-    // Airborne + landing check
     const wasAirborne = player.airborne > 0.01;
 
     if (player.airborne > 0) {
@@ -591,7 +807,6 @@
       }
     }
 
-    // Particles
     for (let i = snowFX.length - 1; i >= 0; i--) {
       const p = snowFX[i];
       p.t += dt;
@@ -601,7 +816,6 @@
       if (p.t >= p.life) snowFX.splice(i, 1);
     }
 
-    // Crash handling
     if (game.state === "crash") {
       game.crashT += dt;
       if (game.crashT > 1.2) {
@@ -616,13 +830,11 @@
     ui.cam.textContent = `X: ${Math.round(camera.x)}`;
   }
 
-  // Sprite pixels
   function px(x, y, s, color) {
     ctx.fillStyle = color;
     ctx.fillRect(x * s, y * s, s, s);
   }
 
-  // Snowboarder: board + rider bank together now (no weird upright look)
   function drawSnowboarder8bit(crashed) {
     const s = 2.3;
     const hop = (player.airborne > 0) ? -6 : 0;
@@ -641,7 +853,6 @@
     const absC = Math.abs(carve);
     const side = -Math.sign(carve || 1);
 
-    // stance shift feels better while banking
     const stanceX = side * (1.5 + 3.0 * absC) * mv;
     const stanceY = 0.5 * mv;
 
@@ -651,20 +862,15 @@
     ctx.translate(-8 * s, (-18 * s) + hop);
     ctx.translate(stanceX * s, stanceY * s);
 
-    // (Removed the old shadow rect completely - this was your grey square)
-
-    // board (no separate yaw here; entire sprite banks together via outer rotation)
     for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
     px(3, 19, s, OUT); px(12, 19, s, OUT);
 
     for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
     for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
 
-    // tip highlights
     px(3, 20, s, "rgba(255,70,90,0.85)");
     px(12, 20, s, "rgba(90,180,255,0.85)");
 
-    // rider (same grid as before, but now it banks with the board)
     px(6, 18, s, OUT); px(9, 18, s, OUT);
     px(6, 17, s, PANTS); px(9, 17, s, PANTS);
 
@@ -692,18 +898,15 @@
   function draw() {
     ctx.imageSmoothingEnabled = false;
 
-    // Snow base
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, W(), H());
 
-    // Subtle slope bands
     for (let i = 0; i < 9; i++) {
       const y = (i / 9) * H();
       ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
       ctx.fillRect(0, y, W(), H() / 9);
     }
 
-    // Halfpipes (rotated 90 degrees longways + various lips)
     for (const hp of halfpipes) {
       const hx = sx(hp.x);
       const hy = sy(hp.y);
@@ -711,31 +914,26 @@
 
       ctx.save();
       ctx.translate(hx, hy);
-      ctx.rotate(Math.PI / 2); // flip 90 degrees so it's longways
+      ctx.rotate(Math.PI / 2);
 
-      // base trench
       ctx.fillStyle = "rgba(10,20,40,0.05)";
       ctx.beginPath();
       ctx.ellipse(0, 0, hp.w * 0.22, hp.h * 0.95, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // inner shading
       ctx.fillStyle = "rgba(10,20,40,0.035)";
       ctx.beginPath();
       ctx.ellipse(0, 0, hp.w * 0.16, hp.h * 0.78, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // lips (vary per pipe)
       ctx.strokeStyle = "rgba(10,20,40,0.12)";
       ctx.lineWidth = 3;
 
-      // left lip
       ctx.beginPath();
       ctx.moveTo(-hp.w * 0.22, -hp.h * 0.55);
       ctx.quadraticCurveTo(-hp.w * 0.22 * hp.lipA, -hp.h * 0.90, -hp.w * 0.22, -hp.h * 1.05);
       ctx.stroke();
 
-      // right lip
       ctx.beginPath();
       ctx.moveTo(hp.w * 0.22, -hp.h * 0.55);
       ctx.quadraticCurveTo(hp.w * 0.22 * hp.lipB, -hp.h * 0.90, hp.w * 0.22, -hp.h * 1.05);
@@ -744,7 +942,6 @@
       ctx.restore();
     }
 
-    // Rails
     for (const r of rails) {
       const cx = sx(r.x);
       const cy = sy(r.y);
@@ -773,7 +970,6 @@
       ctx.restore();
     }
 
-    // Rocks
     for (const rock of rocks) {
       const rx = sx(rock.x);
       const ry = sy(rock.y);
@@ -787,7 +983,6 @@
       ctx.restore();
     }
 
-    // Trees (flipped 180)
     for (const t of trees) {
       const tx = sx(t.x);
       const ty = sy(t.y);
@@ -795,7 +990,7 @@
 
       ctx.save();
       ctx.translate(tx, ty);
-      ctx.rotate(Math.PI); // flip 180 as requested
+      ctx.rotate(Math.PI);
 
       ctx.fillStyle = "rgba(10,20,40,0.04)";
       ctx.beginPath();
@@ -832,7 +1027,6 @@
       ctx.restore();
     }
 
-    // Moguls
     for (const m of moguls) {
       const mx = sx(m.x);
       const my = sy(m.y);
@@ -846,24 +1040,19 @@
       ctx.restore();
     }
 
-    // Powder
     for (const fx of snowFX) {
       const a = 1 - (fx.t / fx.life);
       ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
       ctx.fillRect(fx.x, fx.y, 2, 2);
     }
 
-    // Player at screen center X
     ctx.save();
     ctx.translate(W()*0.5, player.wy);
 
-    // Rotate whole sprite into the carve (this is the fix for "upright rider")
-    // Keep uphill vibe by blending: when stopped, less yaw; when moving, more yaw.
     const bank = player.visualYaw;
     const spin = player.spin * 0.35;
     ctx.rotate(bank + spin);
 
-    // Air ring
     if (player.airborne > 0.01 && game.state !== "crash") {
       ctx.globalAlpha = 0.22;
       ctx.strokeStyle = "rgba(0,0,0,0.20)";
@@ -875,7 +1064,6 @@
     drawSnowboarder8bit(game.state === "crash");
     ctx.restore();
 
-    // Game over
     if (!game.running) {
       ctx.save();
       ctx.fillStyle = "rgba(255,255,255,0.78)";
