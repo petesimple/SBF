@@ -53,7 +53,6 @@
     }
     .btn:active{ transform: translateY(1px); }
 
-    /* Logo button */
     .logoBtn{
       pointer-events:auto;
       border: 1px solid rgba(0,0,0,.10);
@@ -88,7 +87,6 @@
       z-index: 10;
     }
 
-    /* Share modal */
     .modalBackdrop{
       position: fixed;
       inset: 0;
@@ -145,6 +143,7 @@
       width: 240px;
       height: 240px;
       image-rendering: pixelated;
+      border-radius
       border-radius: 14px;
       border: 1px solid rgba(0,0,0,.10);
       background: #fff;
@@ -194,7 +193,6 @@
       <div class="badge" id="comboBadge">Combo: x1</div>
       <div class="badge" id="speedBadge">Speed: 0.0</div>
       <div class="badge" id="camBadge">X: 0</div>
-      <div class="badge" id="yetiBadge" style="display:none;">Yeti: sniffing...</div>
     </div>
 
     <div class="right">
@@ -206,7 +204,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only crash on a bad landing (not pointing downhill). If you biff and keep riding... the Yeti smells blood.</div>
+  <div class="footerTip">Moguls and halfpipes launch you. Tricks are optional. You only biff on hits and bad landings. If you biff, the Yeti smells blood and chases you. Survive 30 seconds to escape.</div>
 
   <div class="modalBackdrop" id="shareBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
@@ -247,7 +245,6 @@
     combo: document.getElementById("comboBadge"),
     speed: document.getElementById("speedBadge"),
     cam: document.getElementById("camBadge"),
-    yeti: document.getElementById("yetiBadge"),
     toast: document.getElementById("toast"),
     restart: document.getElementById("restartBtn"),
 
@@ -260,17 +257,6 @@
   };
 
   ui.shareLink.value = GAME_URL;
-
-  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-  function rand(a, b) { return a + Math.random() * (b - a); }
-  function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
-
-  function showToast(text) {
-    ui.toast.textContent = text;
-    ui.toast.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 750);
-  }
 
   function openShare() {
     ui.shareBackdrop.classList.add("show");
@@ -342,6 +328,18 @@
   window.addEventListener("resize", fitCanvas);
   fitCanvas();
 
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+
+  function showToast(text) {
+    ui.toast.textContent = text;
+    ui.toast.classList.add("show");
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 650);
+  }
+
   // Input
   const input = {
     active: false,
@@ -364,6 +362,8 @@
 
   function onPointerDown(e) {
     if (ui.shareBackdrop.classList.contains("show")) return;
+    if (!game.running) return;
+
     e.preventDefault();
     const p = pointerPos(e);
     input.active = true;
@@ -412,15 +412,11 @@
   const AIR_SPEED_BOOST = 1.45;
   const AIR_FORCE_MOVE = 0.90;
 
-  // Yeti chase tuning
+  // Yeti tuning
   const YETI_ESCAPE_SECONDS = 30;
-  const YETI_SPAWN_DELAY = 1.0;      // seconds after biff before he appears
-  const YETI_BASE_SPEED = 140;       // world units per second
-  const YETI_RAMP = 110;             // speed adds over time
-  const YETI_CATCH_DIST = 58;        // world distance to catch
-  const BLOOD_SECONDS = 12;          // how long you leave a trail
-  const BLOOD_DROP_EVERY = 0.12;     // seconds between trail drops
-  const BLOOD_MAX_POINTS = 220;
+  const YETI_CATCH_RADIUS = 28;
+  const BLOOD_DROP_EVERY = 0.10; // seconds between blood drops while bleeding
+  const BLOOD_KEEP_MAX = 140;
 
   const game = {
     running: true,
@@ -430,17 +426,25 @@
     score: 0,
     combo: 1,
     bestCombo: 1,
-    state: "ride", // ride | stopcrash | win
-    crashT: 0,
-
-    // biff + yeti
-    biffed: false,
-    biffT: 0,
-    bleed: { active:false, t:0, dropT:0, points:[] }, // points in world coords
-    yeti: { active:false, t:0, x:0, y:0, spawnT:0, escaped:false, caught:false },
 
     grind: { active:false, until:0, railId:null, t:0 },
     trick: { active:false, done:false, type:null },
+
+    // biff / bleed / yeti chase
+    bleeding: false,
+    bleedT: 0,
+    bloodDropT: 0,
+    biffSlow: 0,
+
+    yeti: {
+      active: false,
+      t: 0,
+      wx: 0,
+      wy: 0,
+      vx: 0,
+      vy: 0,
+      targetIdx: 0,
+    },
   };
 
   const player = {
@@ -457,7 +461,6 @@
     dirY: 1,
     carve: 0,
     moveFactor: 0,
-
     visualYaw: 0,
   };
 
@@ -470,10 +473,14 @@
   const halfpipes = [];
   const snowFX = [];
 
-  // World <-> screen
+  // Blood trail (world-space segments)
+  const blood = []; // {x,y,w,life,t,dx,dy}
+
+  // World to screen
   function sx(worldX) { return worldX - camera.x + W() * 0.5; }
   function sy(worldY) { return worldY + camera.y; }
-  function playerWorldY() { return player.wy - camera.y; } // screen->world
+  function playerWorldX(){ return player.wx; }
+  function playerWorldY(){ return player.wy - camera.y; }
 
   function spawnMogul(worldY) {
     moguls.push({ id: nextId++, x: camera.x + rand(-W()*0.55, W()*0.55), y: worldY, r: rand(18, 26), used:false });
@@ -529,55 +536,67 @@
     return Math.hypot(px - bx, py - by);
   }
 
-  function stopCrash(reason) {
-    if (game.state === "stopcrash") return;
-    game.state = "stopcrash";
-    game.crashT = 0;
-    game.grind.active = false;
-    game.trick.active = false;
-    game.trick.done = false;
-    game.trick.type = null;
-    game.combo = 1;
+  function dropBlood() {
+    const bx = playerWorldX() + rand(-6, 6);
+    const by = playerWorldY() + rand(-6, 6);
 
-    addPowder(W()*0.5, player.wy, 34);
-    showToast(reason || "Wipeout");
+    // small red slash (random direction) in world space
+    const ang = rand(-Math.PI, Math.PI);
+    const len = rand(10, 22);
+    blood.push({
+      x: bx, y: by,
+      dx: Math.cos(ang) * len,
+      dy: Math.sin(ang) * len,
+      w: rand(2.5, 4.0),
+      life: rand(10, 16),
+      t: 0,
+    });
+
+    if (blood.length > BLOOD_KEEP_MAX) blood.splice(0, blood.length - BLOOD_KEEP_MAX);
   }
 
-  function biff(reason) {
-    // A biff does NOT stop you. It just makes you "hurt" and starts the Yeti chase.
-    game.biffed = true;
-    game.biffT = 0;
-    game.combo = 1;
+  function startYetiChase() {
+    if (game.yeti.active) return;
 
-    // bleeding trail
-    game.bleed.active = true;
-    game.bleed.t = 0;
-    game.bleed.dropT = 0;
-    // keep some previous points (optional) but cap
-    if (game.bleed.points.length > 40) game.bleed.points.splice(0, game.bleed.points.length - 40);
-
-    // schedule yeti
-    game.yeti.active = false;
-    game.yeti.t = 0;
-    game.yeti.spawnT = YETI_SPAWN_DELAY;
-    game.yeti.escaped = false;
-    game.yeti.caught = false;
-
-    addPowder(W()*0.5, player.wy, 20);
-    showToast(reason || "Biffed - keep moving");
-  }
-
-  function spawnYeti() {
-    const py = playerWorldY();
     game.yeti.active = true;
     game.yeti.t = 0;
+    game.yeti.targetIdx = Math.max(0, blood.length - 1);
 
-    // spawn uphill/behind you (higher worldY), slightly off to the side
-    game.yeti.x = player.wx + rand(-160, 160);
-    game.yeti.y = py + 720;
+    // spawn uphill (below the player on screen, i.e. bigger worldY)
+    game.yeti.wx = playerWorldX() + rand(-80, 80);
+    game.yeti.wy = playerWorldY() + rand(420, 520);
+    game.yeti.vx = 0;
+    game.yeti.vy = 0;
 
-    ui.yeti.style.display = "inline-block";
-    showToast("Yeti smells blood...");
+    showToast("Yeti smells blood");
+  }
+
+  function endRun(reason) {
+    if (!game.running) return;
+    game.running = false;
+    showToast(reason || "RIP - Yeti snack");
+  }
+
+  // BIFF (replaces hard crashes)
+  function biff(reason) {
+    // visual + scoring reset
+    game.combo = 1;
+
+    // short stumble + bleed state
+    game.bleeding = true;
+    game.bleedT = 0;
+    game.bloodDropT = 0;
+
+    // slow penalty that recovers (feels like you got rattled)
+    game.speedMul *= 0.85;
+    game.biffSlow = 0.9;
+
+    // start chase immediately and leave some instant blood
+    for (let i = 0; i < 3; i++) dropBlood();
+    startYetiChase();
+
+    addPowder(W()*0.5, player.wy, 22);
+    showToast(reason || "Biffed");
   }
 
   function launch(kind) {
@@ -634,27 +653,22 @@
     game.score = 0;
     game.combo = 1;
     game.bestCombo = 1;
-    game.state = "ride";
-    game.crashT = 0;
-
-    game.biffed = false;
-    game.biffT = 0;
-    game.bleed.active = false;
-    game.bleed.t = 0;
-    game.bleed.dropT = 0;
-    game.bleed.points.length = 0;
-
-    game.yeti.active = false;
-    game.yeti.t = 0;
-    game.yeti.spawnT = 0;
-    game.yeti.escaped = false;
-    game.yeti.caught = false;
-    ui.yeti.style.display = "none";
 
     game.grind.active = false;
     game.trick.active = false;
     game.trick.done = false;
     game.trick.type = null;
+
+    game.bleeding = false;
+    game.bleedT = 0;
+    game.bloodDropT = 0;
+    game.biffSlow = 0;
+
+    game.yeti.active = false;
+    game.yeti.t = 0;
+    game.yeti.vx = 0;
+    game.yeti.vy = 0;
+    game.yeti.targetIdx = 0;
 
     player.wx = 0;
     player.wy = H() * 0.70;
@@ -674,6 +688,7 @@
     rails.length = 0;
     halfpipes.length = 0;
     snowFX.length = 0;
+    blood.length = 0;
 
     for (let i = 0; i < 10; i++) spawnMogul(-i * 240 - 200);
     for (let i = 0; i < 4; i++) spawnRock(-i * 520 - 450);
@@ -687,11 +702,72 @@
   ui.restart.addEventListener("click", reset);
   reset();
 
+  function updateYeti(dt, moveFactor, airBoost) {
+    if (!game.yeti.active) return;
+
+    game.yeti.t += dt;
+
+    // Escaped
+    if (game.yeti.t >= YETI_ESCAPE_SECONDS) {
+      game.yeti.active = false;
+      game.bleeding = false;
+      showToast("Escaped the Yeti");
+      return;
+    }
+
+    // Choose target: newest blood first, then player
+    let tx = playerWorldX();
+    let ty = playerWorldY();
+
+    if (blood.length > 0) {
+      // walk backwards through trail
+      const idx = clamp(game.yeti.targetIdx, 0, blood.length - 1) | 0;
+      const b = blood[idx];
+      tx = b.x; ty = b.y;
+
+      // if close enough, move to next newer segment
+      const dx = tx - game.yeti.wx;
+      const dy = ty - game.yeti.wy;
+      const d = Math.hypot(dx, dy);
+      if (d < 26 && idx < blood.length - 1) {
+        game.yeti.targetIdx = idx + 1;
+      }
+      // always bias toward the newest blood as it grows
+      if (game.yeti.targetIdx < blood.length - 1 && Math.random() < 0.06) {
+        game.yeti.targetIdx = blood.length - 1;
+      }
+    }
+
+    const dx = tx - game.yeti.wx;
+    const dy = ty - game.yeti.wy;
+    const d = Math.hypot(dx, dy) || 1;
+
+    // Yeti speed scales with your downhill speed so outrunning is about staying pointed downhill
+    const shredSpeed = game.speed * game.speedMul * (0.55 + 0.45 * moveFactor) * (0.9 + 0.1 * airBoost);
+    const yetiSpeed = clamp(shredSpeed * 0.78, 110, 265);
+
+    const ax = (dx / d) * yetiSpeed;
+    const ay = (dy / d) * yetiSpeed;
+
+    game.yeti.vx += (ax - game.yeti.vx) * clamp(dt * 6.5, 0, 1);
+    game.yeti.vy += (ay - game.yeti.vy) * clamp(dt * 6.5, 0, 1);
+
+    game.yeti.wx += game.yeti.vx * dt;
+    game.yeti.wy += game.yeti.vy * dt;
+
+    // Catch check (screen space)
+    const ysx = sx(game.yeti.wx);
+    const ysy = sy(game.yeti.wy);
+    const dd = Math.hypot((W()*0.5) - ysx, player.wy - ysy);
+    if (dd < YETI_CATCH_RADIUS) {
+      endRun("Yeti got you");
+    }
+  }
+
   function update(dt) {
     if (!game.running) return;
     game.time += dt;
 
-    // Lateral intent
     let targetScreenX = input.x;
     if (!input.active) {
       targetScreenX = (W() * 0.5)
@@ -701,15 +777,13 @@
     const center = W() * 0.5;
     const intent = clamp((targetScreenX - center) / (W() * 0.35), -1, 1);
 
-    // World lateral movement
     const lateralSpeed = 320;
     player.vx += (intent * lateralSpeed - player.vx) * clamp(dt * 10, 0, 1);
     player.wx += player.vx * dt;
 
-    // Direction for downhill gating
     let dirX = intent, dirY = 1;
     if (input.active) {
-      const dy = input.y - player.wy; // finger below = positive
+      const dy = input.y - player.wy;
       dirY = clamp(dy / 220, -1, 1);
       const len = Math.hypot(dirX, dirY) || 1;
       dirX /= len; dirY /= len;
@@ -720,9 +794,17 @@
     player.dirX = dirX;
     player.dirY = dirY;
 
+    // Base speed ramp
     game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
-    // Downhill movement factor
+    // Recover from biff slowdown
+    if (game.biffSlow && game.biffSlow > 0) {
+      game.biffSlow -= dt;
+      const t = 1 - clamp(game.biffSlow / 0.9, 0, 1);
+      game.speedMul += t * 0.15;
+      if (game.biffSlow <= 0) game.biffSlow = 0;
+    }
+
     const downhillAlign = player.dirY;
     let moveFactor = 0;
     if (downhillAlign > DOWNHILL_THRESH_MOVE) {
@@ -733,31 +815,40 @@
     const airborneNow = player.airborne > 0.01;
     if (airborneNow) moveFactor = Math.max(moveFactor, AIR_FORCE_MOVE);
     if (game.grind.active) moveFactor = Math.max(moveFactor, 0.85);
-
     player.moveFactor = moveFactor;
 
     const airBoost = airborneNow ? AIR_SPEED_BOOST : 1.0;
     const scrollSpeed = game.speed * game.speedMul * moveFactor * airBoost;
     camera.y += scrollSpeed * dt;
 
-    // Camera follow
     camera.x += (player.wx - camera.x) * clamp(camera.follow, 0, 1);
 
-    // Carve smoothing
     const rawCarve = clamp(player.dirX / 0.9, -1, 1);
     player.carve += (rawCarve - player.carve) * clamp(dt * 10, 0, 1);
 
-    // Sprite visual yaw: board + rider bank into carve when moving
     const absC = Math.abs(player.carve);
     const mv = player.moveFactor;
-    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC; // 45 to 90
+    const targetMoving = (Math.PI / 4) + (Math.PI / 4) * absC;
     const yawMag = targetMoving * mv;
     player.visualYaw = -yawMag * Math.sign(player.carve || 1);
 
-    // Swipes during airtime
     if (input.justSwiped) {
       handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
       input.justSwiped = false;
+    }
+
+    // Bleeding + blood trail + yeti timer
+    if (game.bleeding) {
+      game.bleedT += dt;
+
+      game.bloodDropT += dt;
+      if (game.bloodDropT >= BLOOD_DROP_EVERY) {
+        game.bloodDropT = 0;
+        if (Math.random() < 0.85) dropBlood();
+      }
+
+      // keep the chase alive for the full timer
+      if (!game.yeti.active) startYetiChase();
     }
 
     // Spawn/cull
@@ -777,6 +868,12 @@
     }
     cull(moguls); cull(rocks); cull(trees); cull(rails); cull(halfpipes);
 
+    // cull blood slowly
+    for (let i = blood.length - 1; i >= 0; i--) {
+      blood[i].t += dt;
+      if (blood[i].t >= blood[i].life) blood.splice(i, 1);
+    }
+
     // Grind scoring
     if (game.grind.active) {
       game.grind.t += dt;
@@ -784,88 +881,81 @@
       if (performance.now() > game.grind.until) game.grind.active = false;
     }
 
-    // Collisions/interactions (only if not hard stopped)
-    if (game.state !== "stopcrash") {
-      // Rocks stop you (hard crash)
-      for (const rock of rocks) {
-        const rx = sx(rock.x);
-        const ry = sy(rock.y);
-        if (ry < -120 || ry > H() + 120) continue;
-        const rr = (player.r + rock.r) * 0.95;
-        if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { stopCrash("Rocked"); break; }
-      }
+    // Collisions/interactions
+    // ALL crash types now BIFF (no hard stop) so the run keeps shredding and Yeti always applies.
+    // Rocks biff
+    for (const rock of rocks) {
+      const rx = sx(rock.x);
+      const ry = sy(rock.y);
+      if (ry < -120 || ry > H() + 120) continue;
+      const rr = (player.r + rock.r) * 0.95;
+      if (dist2(W()*0.5, player.wy, rx, ry) <= rr * rr) { biff("Rocked"); break; }
+    }
 
-      // Trees stop you (hard crash)
-      if (game.state !== "stopcrash") {
-        for (const t of trees) {
-          const tx = sx(t.x);
-          const ty = sy(t.y);
-          if (ty < -140 || ty > H() + 140) continue;
-          const rr = (player.r + t.r) * 0.90;
-          if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { stopCrash("Tree'd"); break; }
+    // Trees biff
+    for (const t of trees) {
+      const tx = sx(t.x);
+      const ty = sy(t.y);
+      if (ty < -140 || ty > H() + 140) continue;
+      const rr = (player.r + t.r) * 0.90;
+      if (dist2(W()*0.5, player.wy, tx, ty) <= rr * rr) { biff("Tree'd"); break; }
+    }
+
+    // Moguls launch
+    for (const m of moguls) {
+      const mx = sx(m.x);
+      const my = sy(m.y);
+      if (my < -140 || my > H() + 140) continue;
+      const rr = (player.r + m.r) * 0.95;
+      if (!m.used && dist2(W()*0.5, player.wy, mx, my) <= rr * rr) {
+        m.used = true;
+        launch("mogul");
+        break;
+      }
+    }
+
+    // Rails grind (no grind in air)
+    if (!game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
+      for (const r of rails) {
+        if (performance.now() < r.usedUntil) continue;
+
+        const cx = sx(r.x);
+        const cy = sy(r.y);
+        if (cy < -200 || cy > H() + 220) continue;
+
+        const a = r.angle;
+        const dx = Math.sin(a) * r.len;
+        const dy = Math.cos(a) * r.len;
+        const x1 = cx - dx * 0.5;
+        const y1 = cy - dy * 0.5;
+        const x2 = cx + dx * 0.5;
+        const y2 = cy + dy * 0.5;
+
+        const d = distPointSeg(W()*0.5, player.wy, x1, y1, x2, y2);
+        if (d < 14) {
+          startGrind(r);
+          addPowder(W()*0.5, player.wy + 10, 14);
+          break;
         }
       }
+    }
 
-      // Moguls launch
-      if (game.state !== "stopcrash") {
-        for (const m of moguls) {
-          const mx = sx(m.x);
-          const my = sy(m.y);
-          if (my < -140 || my > H() + 140) continue;
-          const rr = (player.r + m.r) * 0.95;
-          if (!m.used && dist2(W()*0.5, player.wy, mx, my) <= rr * rr) {
-            m.used = true;
-            launch("mogul");
-            break;
-          }
-        }
-      }
+    // Halfpipes launch (rotated 90 degrees longways)
+    for (const hp of halfpipes) {
+      if (performance.now() < hp.usedUntil) continue;
 
-      // Rails grind (no grind in air)
-      if (game.state !== "stopcrash" && !game.grind.active && player.moveFactor > 0.35 && !airborneNow) {
-        for (const r of rails) {
-          if (performance.now() < r.usedUntil) continue;
+      const hx = sx(hp.x);
+      const hy = sy(hp.y);
+      if (hy < -240 || hy > H() + 260) continue;
 
-          const cx = sx(r.x);
-          const cy = sy(r.y);
-          if (cy < -200 || cy > H() + 220) continue;
-
-          const a = r.angle;
-          const dx = Math.sin(a) * r.len;
-          const dy = Math.cos(a) * r.len;
-          const x1 = cx - dx * 0.5;
-          const y1 = cy - dy * 0.5;
-          const x2 = cx + dx * 0.5;
-          const y2 = cy + dy * 0.5;
-
-          const d = distPointSeg(W()*0.5, player.wy, x1, y1, x2, y2);
-          if (d < 14) {
-            startGrind(r);
-            addPowder(W()*0.5, player.wy + 10, 14);
-            break;
-          }
-        }
-      }
-
-      // Halfpipes launch
-      if (game.state !== "stopcrash") {
-        for (const hp of halfpipes) {
-          if (performance.now() < hp.usedUntil) continue;
-
-          const hx = sx(hp.x);
-          const hy = sy(hp.y);
-          if (hy < -240 || hy > H() + 260) continue;
-
-          const a = hp.h * 1.05;
-          const b = hp.w * 0.32;
-          const px = (W()*0.5 - hx) / a;
-          const py = (player.wy - hy) / b;
-          if ((px*px + py*py) <= 1.0) {
-            hp.usedUntil = performance.now() + 1400;
-            launch("halfpipe");
-            break;
-          }
-        }
+      const a = hp.h * 1.05;
+      const b = hp.w * 0.32;
+      const px = (W()*0.5 - hx) / a;
+      const py = (player.wy - hy) / b;
+      if ((px*px + py*py) <= 1.0) {
+        hp.usedUntil = performance.now() + 1400;
+        launch("halfpipe");
+        break;
       }
     }
 
@@ -881,108 +971,15 @@
     }
 
     const landedNow = wasAirborne && player.airborne <= 0.01;
-
-    // Landing outcomes:
-    // - bad landing = BIFF (keep moving, bleeding, yeti timer starts)
-    // - good landing = normal
-    if (landedNow && game.state !== "stopcrash") {
+    if (landedNow) {
       game.trick.active = false;
 
+      // Bad landing now BIFF (no game over)
       if (player.dirY <= DOWNHILL_THRESH_LAND) {
-        biff("Biffed landing");
+        biff("Bad landing");
       } else {
         showToast(game.trick.done ? "Landed" : "Clean landing");
       }
-    }
-
-    // Bleeding trail + yeti logic
-    if (game.biffed && game.state !== "stopcrash") {
-      game.biffT += dt;
-
-      // Start bleeding for a while (drops a trail in world space)
-      if (game.bleed.active) {
-        game.bleed.t += dt;
-        game.bleed.dropT += dt;
-
-        while (game.bleed.dropT >= BLOOD_DROP_EVERY) {
-          game.bleed.dropT -= BLOOD_DROP_EVERY;
-
-          const py = playerWorldY();
-          // tiny random "line segment" vibe
-          game.bleed.points.push({
-            x: player.wx + rand(-10, 10),
-            y: py + rand(-4, 4),
-            len: rand(10, 26),
-            ang: rand(-0.6, 0.6),
-            w: rand(2, 4),
-            a: rand(0.35, 0.75)
-          });
-
-          if (game.bleed.points.length > BLOOD_MAX_POINTS) {
-            game.bleed.points.splice(0, game.bleed.points.length - BLOOD_MAX_POINTS);
-          }
-        }
-
-        if (game.bleed.t >= BLOOD_SECONDS) {
-          game.bleed.active = false;
-        }
-      }
-
-      // Yeti spawn countdown
-      if (!game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
-        game.yeti.spawnT -= dt;
-        if (game.yeti.spawnT <= 0) spawnYeti();
-      }
-
-      // If yeti active, chase
-      if (game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
-        game.yeti.t += dt;
-
-        const pxw = player.wx;
-        const pyw = playerWorldY();
-
-        // Choose a blood target if available: the most recent point behind you a bit
-        let tx = pxw, ty = pyw;
-        if (game.bleed.points.length) {
-          const idx = Math.max(0, game.bleed.points.length - 1 - Math.floor(rand(0, 6)));
-          tx = game.bleed.points[idx].x;
-          ty = game.bleed.points[idx].y;
-        }
-
-        // Move toward target (mostly follows trail), but also pulls toward the player slightly
-        const blendToPlayer = 0.35;
-        tx = tx * (1 - blendToPlayer) + pxw * blendToPlayer;
-        ty = ty * (1 - blendToPlayer) + pyw * blendToPlayer;
-
-        const dx = tx - game.yeti.x;
-        const dy = ty - game.yeti.y;
-        const d = Math.hypot(dx, dy) || 1;
-
-        // Yeti speed ramps the longer he’s been chasing
-        const sp = YETI_BASE_SPEED + Math.min(1.0, game.yeti.t / 10) * YETI_RAMP;
-
-        // Move
-        game.yeti.x += (dx / d) * sp * dt;
-        game.yeti.y += (dy / d) * sp * dt;
-
-        // Catch check (use player pos)
-        const dc = Math.hypot(pxw - game.yeti.x, pyw - game.yeti.y);
-        if (dc <= YETI_CATCH_DIST) {
-          game.yeti.caught = true;
-          game.running = false;
-          showToast("YETI'D");
-        }
-
-        // Escape check
-        if (game.biffT >= YETI_ESCAPE_SECONDS) {
-          game.yeti.escaped = true;
-          game.yeti.active = false;
-          ui.yeti.style.display = "none";
-          showToast("Escaped the Yeti");
-        }
-      }
-    } else {
-      ui.yeti.style.display = "none";
     }
 
     // Particles
@@ -995,43 +992,29 @@
       if (p.t >= p.life) snowFX.splice(i, 1);
     }
 
-    // Hard crash stops the run after a short beat
-    if (game.state === "stopcrash") {
-      game.crashT += dt;
-      if (game.crashT > 1.0) {
-        game.running = false;
-        showToast("Wipeout - tap Restart");
-      }
-    }
+    // Update Yeti last (so it uses the newest blood)
+    updateYeti(dt, moveFactor, airBoost);
 
     ui.score.textContent = `Score: ${Math.floor(game.score)}`;
     ui.combo.textContent = `Combo: x${game.combo}`;
     ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor * airBoost).toFixed(1)}`;
     ui.cam.textContent = `X: ${Math.round(camera.x)}`;
-
-    // Yeti HUD label
-    if (game.yeti.active && !game.yeti.escaped && !game.yeti.caught) {
-      const left = Math.max(0, Math.ceil(YETI_ESCAPE_SECONDS - game.biffT));
-      ui.yeti.style.display = "inline-block";
-      ui.yeti.textContent = `Yeti: ${left}s to outrun`;
-    }
   }
 
-  // Sprite pixels
+  // Pixel helper
   function px(x, y, s, color) {
     ctx.fillStyle = color;
     ctx.fillRect(x * s, y * s, s, s);
   }
 
-  // Snowboarder
-  function drawSnowboarder8bit(isHurt) {
+  function drawSnowboarder8bit(isBiffed) {
     const s = 2.3;
     const hop = (player.airborne > 0) ? -6 : 0;
 
     const OUT = "rgba(0,0,0,0.55)";
-    const HELM = isHurt ? "rgba(255,155,175,0.95)" : "rgba(245,245,255,0.95)";
-    const FACE = isHurt ? "rgba(255,185,190,0.95)" : "rgba(245,210,170,0.95)";
-    const JACKET = isHurt ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
+    const HELM = isBiffed ? "rgba(255,120,150,0.95)" : "rgba(245,245,255,0.95)";
+    const FACE = "rgba(245,210,170,0.95)";
+    const JACKET = isBiffed ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
     const PANTS = "rgba(60,90,140,0.95)";
     const GLOVE = "rgba(230,230,240,0.9)";
     const BOARD = "rgba(255,255,255,0.95)";
@@ -1051,159 +1034,134 @@
     ctx.translate(-8 * s, (-18 * s) + hop);
     ctx.translate(stanceX * s, stanceY * s);
 
-    // board outline
+    // board
     for (let x = 2; x <= 13; x++) px(x, 20, s, OUT);
     px(3, 19, s, OUT); px(12, 19, s, OUT);
 
-    // board fill
     for (let x = 3; x <= 12; x++) px(x, 20, s, BOARD);
     for (let x = 4; x <= 11; x++) px(x, 21, s, BOARD2);
 
-    // tip highlights
     px(3, 20, s, "rgba(255,70,90,0.85)");
     px(12, 20, s, "rgba(90,180,255,0.85)");
 
-    // legs
+    // rider
     px(6, 18, s, OUT); px(9, 18, s, OUT);
     px(6, 17, s, PANTS); px(9, 17, s, PANTS);
+
     px(6, 16, s, PANTS); px(7, 16, s, PANTS); px(8, 16, s, PANTS); px(9, 16, s, PANTS);
     px(7, 15, s, PANTS); px(8, 15, s, PANTS);
 
-    // body
     px(6, 13, s, JACKET); px(7, 13, s, JACKET); px(8, 13, s, JACKET); px(9, 13, s, JACKET);
     px(6, 14, s, JACKET); px(7, 14, s, JACKET); px(8, 14, s, JACKET); px(9, 14, s, JACKET);
     px(7, 12, s, JACKET); px(8, 12, s, JACKET);
 
-    // arms
     px(5, 13, s, JACKET); px(10, 13, s, JACKET);
     px(4, 14, s, JACKET); px(11, 14, s, JACKET);
     px(4, 15, s, GLOVE);  px(11, 15, s, GLOVE);
 
-    // helmet/head
     px(7, 10, s, HELM); px(8, 10, s, HELM);
     px(6, 11, s, HELM); px(7, 11, s, HELM); px(8, 11, s, HELM); px(9, 11, s, HELM);
 
-    // goggles
     px(7, 11, s, "rgba(0,0,0,0.55)");
     px(8, 11, s, "rgba(0,0,0,0.55)");
     px(7, 12, s, FACE);
 
-    // tiny "blood smear" on rider when hurt
-    if (isHurt) {
-      px(9, 14, s, "rgba(190,10,25,0.75)");
-      px(6, 16, s, "rgba(190,10,25,0.55)");
-    }
-
     ctx.restore();
   }
 
-  // Simple 8-bit yeti
-  function drawYeti8bit(worldX, worldY) {
-    const x = sx(worldX);
-    const y = sy(worldY);
-
-    // only draw if on-screen-ish
-    if (y < -240 || y > H() + 260) return;
-
+  function drawYeti8bit() {
+    // simple chunky 8-bit yeti
     const s = 2.4;
+    const hop = (Math.sin(game.yeti.t * 8) * 2.0);
+
+    const FUR = "rgba(245,245,255,0.95)";
+    const OUT = "rgba(0,0,0,0.55)";
+    const SH = "rgba(0,0,0,0.10)";
+    const MOUTH = "rgba(90,40,40,0.95)";
+    const EYE = "rgba(0,0,0,0.85)";
 
     ctx.save();
-    ctx.translate(x, y);
-
-    // tiny wobble
-    const wob = Math.sin(performance.now() / 120) * 0.12;
-    ctx.rotate(wob);
+    ctx.translate(-9*s, -18*s + hop);
 
     // shadow
-    ctx.fillStyle = "rgba(10,20,40,0.06)";
+    ctx.fillStyle = SH;
     ctx.beginPath();
-    ctx.ellipse(0, 18, 26, 14, 0, 0, Math.PI * 2);
+    ctx.ellipse(9*s, 20*s, 10*s, 5*s, 0, 0, Math.PI*2);
     ctx.fill();
 
-    // pixel body
-    ctx.imageSmoothingEnabled = false;
-    ctx.translate(-12*s, -22*s);
-
-    const FUR1 = "rgba(255,255,255,0.95)";
-    const FUR2 = "rgba(10,20,40,0.10)";
-    const OUT = "rgba(0,0,0,0.45)";
-    const EYE = "rgba(0,0,0,0.70)";
-    const NOSE = "rgba(190,10,25,0.85)";
-
-    // body block
-    for (let yy = 6; yy <= 17; yy++) {
-      for (let xx = 6; xx <= 17; xx++) px(xx, yy, s, FUR1);
+    // body outline block
+    for (let x=3; x<=14; x++) px(x, 10, s, OUT);
+    for (let y=11; y<=18; y++){
+      px(3,y,s,OUT); px(14,y,s,OUT);
+      for (let x=4; x<=13; x++) px(x,y,s,FUR);
     }
-    // shading
-    for (let yy = 10; yy <= 17; yy++) {
-      for (let xx = 6; xx <= 10; xx++) px(xx, yy, s, FUR2);
+    // head
+    for (let y=4; y<=9; y++){
+      px(5,y,s,OUT); px(12,y,s,OUT);
+      for (let x=6; x<=11; x++) px(x,y,s,FUR);
     }
+    // ears/horns
+    px(5,5,s,OUT); px(12,5,s,OUT);
+    px(4,6,s,OUT); px(13,6,s,OUT);
+    px(5,6,s,FUR); px(12,6,s,FUR);
+
+    // face
+    px(7,6,s,EYE); px(10,6,s,EYE);
+    px(8,8,s,MOUTH); px(9,8,s,MOUTH);
+
     // arms
-    for (let yy = 9; yy <= 14; yy++) px(4, yy, s, FUR1);
-    for (let yy = 9; yy <= 14; yy++) px(19, yy, s, FUR1);
-    // outline bits
-    for (let xx = 6; xx <= 17; xx++) { px(xx, 6, s, OUT); px(xx, 17, s, OUT); }
-    for (let yy = 6; yy <= 17; yy++) { px(6, yy, s, OUT); px(17, yy, s, OUT); }
+    px(2,12,s,OUT); px(15,12,s,OUT);
+    px(2,13,s,FUR); px(15,13,s,FUR);
+    px(1,14,s,OUT); px(16,14,s,OUT);
+    px(2,14,s,FUR); px(15,14,s,FUR);
 
-    // head bump
-    for (let yy = 2; yy <= 7; yy++) for (let xx = 8; xx <= 15; xx++) px(xx, yy, s, FUR1);
-    for (let xx = 8; xx <= 15; xx++) px(xx, 2, s, OUT);
-
-    // eyes + nose
-    px(10, 5, s, EYE);
-    px(13, 5, s, EYE);
-    px(12, 6, s, NOSE);
+    // legs
+    px(6,19,s,OUT); px(11,19,s,OUT);
+    px(6,20,s,FUR); px(11,20,s,FUR);
 
     ctx.restore();
   }
 
   function drawBloodTrail() {
-    if (!game.bleed.points.length) return;
+    if (blood.length === 0) return;
 
-    // draw older first so newest looks strongest
-    for (let i = 0; i < game.bleed.points.length; i++) {
-      const p = game.bleed.points[i];
-      const x = sx(p.x);
-      const y = sy(p.y);
-      if (y < -80 || y > H() + 80) continue;
+    ctx.save();
+    ctx.lineCap = "round";
 
-      const a = p.a * (0.55 + 0.45 * (i / game.bleed.points.length));
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(p.ang);
+    for (const b of blood) {
+      const a = clamp(1 - (b.t / b.life), 0, 1);
+      const x1 = sx(b.x);
+      const y1 = sy(b.y);
+      const x2 = sx(b.x + b.dx);
+      const y2 = sy(b.y + b.dy);
 
-      ctx.strokeStyle = `rgba(185,10,25,${a})`;
-      ctx.lineWidth = p.w;
-      ctx.lineCap = "round";
+      // only draw if near screen
+      if (Math.max(y1,y2) < -120 || Math.min(y1,y2) > H()+140) continue;
+
+      ctx.strokeStyle = `rgba(180,20,30,${0.65 * a})`;
+      ctx.lineWidth = b.w;
       ctx.beginPath();
-      ctx.moveTo(-p.len * 0.5, 0);
-      ctx.lineTo(p.len * 0.5, 0);
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
       ctx.stroke();
-
-      // a couple droplets
-      ctx.fillStyle = `rgba(185,10,25,${a * 0.75})`;
-      ctx.fillRect(-1, -1, 2, 2);
-      if (Math.random() < 0.02) ctx.fillRect(3, 1, 2, 2);
-
-      ctx.restore();
     }
+
+    ctx.restore();
   }
 
   function draw() {
     ctx.imageSmoothingEnabled = false;
 
-    // Snow base
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, W(), H());
 
-    // Subtle slope bands
     for (let i = 0; i < 9; i++) {
       const y = (i / 9) * H();
       ctx.fillStyle = i % 2 === 0 ? "rgba(10,20,40,0.03)" : "rgba(10,20,40,0.015)";
       ctx.fillRect(0, y, W(), H() / 9);
     }
 
-    // Halfpipes (rotated 90 degrees longways + various lips)
+    // Halfpipes
     for (const hp of halfpipes) {
       const hx = sx(hp.x);
       const hy = sy(hp.y);
@@ -1282,7 +1240,7 @@
       ctx.restore();
     }
 
-    // Trees (flipped 180)
+    // Trees
     for (const t of trees) {
       const tx = sx(t.x);
       const ty = sy(t.y);
@@ -1341,22 +1299,33 @@
       ctx.restore();
     }
 
-    // Blood trail (after biff)
+    // Blood trail (behind objects but visible)
     drawBloodTrail();
 
-    // Powder particles
+    // Powder
     for (const fx of snowFX) {
       const a = 1 - (fx.t / fx.life);
       ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
       ctx.fillRect(fx.x, fx.y, 2, 2);
     }
 
-    // Yeti (behind you in world space)
-    if (game.yeti.active && !game.yeti.caught && !game.yeti.escaped) {
-      drawYeti8bit(game.yeti.x, game.yeti.y);
+    // Yeti (draw before rider so it feels like it's coming up the hill)
+    if (game.yeti.active) {
+      const yx = sx(game.yeti.wx);
+      const yy = sy(game.yeti.wy);
+      if (yy > -140 && yy < H() + 180) {
+        ctx.save();
+        ctx.translate(yx, yy);
+        // lean slightly toward player
+        const dx = (W()*0.5) - yx;
+        const ang = clamp(dx / 500, -0.35, 0.35);
+        ctx.rotate(ang);
+        drawYeti8bit();
+        ctx.restore();
+      }
     }
 
-    // Player at screen center X
+    // Player (center)
     ctx.save();
     ctx.translate(W()*0.5, player.wy);
 
@@ -1364,7 +1333,8 @@
     const spin = player.spin * 0.35;
     ctx.rotate(bank + spin);
 
-    if (player.airborne > 0.01 && game.state !== "stopcrash") {
+    // Air ring
+    if (player.airborne > 0.01) {
       ctx.globalAlpha = 0.22;
       ctx.strokeStyle = "rgba(0,0,0,0.20)";
       ctx.lineWidth = 3;
@@ -1372,32 +1342,21 @@
       ctx.globalAlpha = 1;
     }
 
-    const isHurt = game.biffed && game.biffT < BLOOD_SECONDS;
-    drawSnowboarder8bit(isHurt || game.state === "stopcrash");
+    drawSnowboarder8bit(game.bleeding);
     ctx.restore();
 
     // Game over overlay
     if (!game.running) {
       ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,0.80)";
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
       ctx.fillRect(0, 0, W(), H());
       ctx.fillStyle = "rgba(10,20,35,0.95)";
       ctx.font = "800 30px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
-      ctx.fillText("Snowboard Free", W()*0.5, H()*0.38);
-
+      ctx.fillText("Snowboard Free", W()*0.5, H()*0.40);
       ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-      ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W()*0.5, H()*0.44);
-
-      if (game.yeti.caught) {
-        ctx.fillText("The Yeti followed the blood trail...", W()*0.5, H()*0.50);
-      } else if (game.state === "stopcrash") {
-        ctx.fillText("That one stopped you.", W()*0.5, H()*0.50);
-      } else {
-        ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.50);
-      }
-
-      ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.56);
+      ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W()*0.5, H()*0.46);
+      ctx.fillText("Press Restart to shred again", W()*0.5, H()*0.52);
       ctx.restore();
     }
   }
@@ -1411,7 +1370,6 @@
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
-
 })();
 </script>
 
