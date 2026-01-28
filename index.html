@@ -53,6 +53,7 @@
       text-shadow: 0 2px 8px rgba(0,0,0,.6);
       pointer-events:none;
       text-align: center;
+      max-width: calc(100vw - 24px);
     }
   </style>
 </head>
@@ -71,8 +72,7 @@
 
   <script>
     // Snowboard Free - tiny prototype
-    // Single file, GitHub Pages friendly, mobile-first.
-    // Change: downhill scrolling only happens when board points downhill.
+    // Change: pixel-art snowboarder sprite, 8-bit vibe
 
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -106,8 +106,6 @@
       active: false,
       x: W() * 0.5,
       y: H() * 0.7,
-      lastX: null,
-      lastY: null,
       swipeDX: 0,
       swipeDY: 0,
       swipeTime: 0,
@@ -115,7 +113,6 @@
       swipeStartY: 0,
       swipeStartT: 0,
       justSwiped: false,
-      lastPointerMoveT: 0,
     };
 
     function showToast(text) {
@@ -136,7 +133,6 @@
       const p = pointerPos(e);
       input.active = true;
       input.x = p.x; input.y = p.y;
-      input.lastX = p.x; input.lastY = p.y;
       input.swipeStartX = p.x; input.swipeStartY = p.y;
       input.swipeStartT = performance.now();
       input.justSwiped = false;
@@ -147,7 +143,6 @@
       e.preventDefault();
       const p = pointerPos(e);
       input.x = p.x; input.y = p.y;
-      input.lastPointerMoveT = performance.now();
     }
 
     function onPointerUp(e) {
@@ -156,19 +151,14 @@
       const p = pointerPos(e);
       input.active = false;
 
-      // Compute swipe vector from start to end
       const tNow = performance.now();
       const dt = Math.max(1, tNow - input.swipeStartT);
-      const dx = p.x - input.swipeStartX;
-      const dy = p.y - input.swipeStartY;
-
-      input.swipeDX = dx;
-      input.swipeDY = dy;
+      input.swipeDX = p.x - input.swipeStartX;
+      input.swipeDY = p.y - input.swipeStartY;
       input.swipeTime = dt;
       input.justSwiped = true;
     }
 
-    // Touch and mouse
     canvas.addEventListener("touchstart", onPointerDown, { passive: false });
     canvas.addEventListener("touchmove", onPointerMove, { passive: false });
     canvas.addEventListener("touchend", onPointerUp, { passive: false });
@@ -182,24 +172,22 @@
     window.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
     window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
-    // Game objects
     const game = {
       running: true,
       time: 0,
       scrollY: 0,
-      speed: 220, // base pixels per second (before gating)
+      speed: 220,
       speedMul: 1,
       score: 0,
       combo: 1,
       bestCombo: 1,
-      state: "ride", // ride | trick | crash
+      state: "ride",
       crashT: 0,
-      // mogul trick window
       trick: {
         active: false,
         until: 0,
         mogulId: null,
-        required: null, // up | down
+        required: null,
         resolved: false,
       }
     };
@@ -213,8 +201,6 @@
       spin: 0,
       spinDir: 0,
       airborne: 0,
-
-      // board pointing direction (normalized)
       dirX: 0,
       dirY: 1,
       lastDirX: 0,
@@ -250,18 +236,14 @@
       player.spin = 0;
       player.spinDir = 0;
       player.airborne = 0;
-
-      player.dirX = 0;
-      player.dirY = 1;
-      player.lastDirX = 0;
-      player.lastDirY = 1;
+      player.dirX = 0; player.dirY = 1;
+      player.lastDirX = 0; player.lastDirY = 1;
 
       moguls.length = 0;
       rocks.length = 0;
       snowFX.length = 0;
       input.justSwiped = false;
 
-      // Seed some objects
       for (let i = 0; i < 10; i++) spawnMogul(-i * 220 - 200);
       for (let i = 0; i < 6; i++) spawnRock(-i * 380 - 300);
 
@@ -303,19 +285,15 @@
     ui.restart.addEventListener("click", reset);
     reset();
 
-    function worldToScreenY(worldY) {
-      return worldY + game.scrollY;
-    }
+    function worldToScreenY(worldY) { return worldY + game.scrollY; }
 
     function update(dt) {
       if (!game.running) return;
 
       game.time += dt;
 
-      // Determine where the player wants to go
       let targetX = input.x;
       if (!input.active) {
-        // mouse: keep last x, keyboard can nudge
         targetX = clamp(
           player.x
           + (keys["arrowleft"] ? -240 * dt : 0)
@@ -325,24 +303,16 @@
         );
       }
 
-      // Follow with smoothing
       const dx = targetX - player.x;
       player.vx = dx * 10;
       player.x += dx * clamp(dt * 8, 0, 1);
       player.x = clamp(player.x, 25, W() - 25);
 
-      // Tilt feel
       player.tilt = clamp(player.vx / 700, -0.7, 0.7);
 
-      // Speed ramps slowly (this is the potential speed, then we gate it)
       game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
 
-      // Compute board direction (normalized)
-      // If finger is down: point board toward finger
-      // If finger is up: point based on motion, with some downhill intent
-      let dirX = 0;
-      let dirY = 1;
-
+      let dirX = 0, dirY = 1;
       if (input.active) {
         const vx = (input.x - player.x);
         const vy = (input.y - player.y);
@@ -351,70 +321,51 @@
         dirY = vy / len;
       } else {
         const vx = player.vx;
-        const vy = 180; // downhill intent when not touching
+        const vy = 180;
         const len = Math.hypot(vx, vy) || 1;
         dirX = vx / len;
         dirY = vy / len;
       }
 
-      player.dirX = dirX;
-      player.dirY = dirY;
-      player.lastDirX = dirX;
-      player.lastDirY = dirY;
+      player.dirX = dirX; player.dirY = dirY;
+      player.lastDirX = dirX; player.lastDirY = dirY;
 
-      // Gate downhill scrolling by how "downhill" the board is pointed.
-      // dirY ranges -1..+1 (uphill..downhill).
       const downhillAlign = dirY;
-      const THRESH = 0.25; // tune: 0.1 easy, 0.35 stricter
+      const THRESH = 0.25;
 
       let moveFactor = 0;
       if (downhillAlign > THRESH) {
         moveFactor = (downhillAlign - THRESH) / (1 - THRESH);
-        moveFactor = moveFactor * moveFactor; // ease-in
+        moveFactor = moveFactor * moveFactor;
       }
 
       const scrollSpeed = game.speed * game.speedMul * moveFactor;
       game.scrollY += scrollSpeed * dt;
 
-      // If a swipe ended this frame, try to resolve trick
       if (input.justSwiped) {
         handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
         input.justSwiped = false;
       }
 
-      // Maintain object pools: recycle when past screen
-      const topWorld = -game.scrollY - 120;               // above screen in world space
-      const bottomWorld = -game.scrollY + H() + 260;      // below screen in world space
+      const topWorld = -game.scrollY - 120;
+      const bottomWorld = -game.scrollY + H() + 260;
 
       while (moguls.length < 14) spawnMogul(topWorld - rand(120, 260));
       while (rocks.length < 9) spawnRock(topWorld - rand(250, 520));
 
-      for (let i = moguls.length - 1; i >= 0; i--) {
-        if (moguls[i].y > bottomWorld + 600) moguls.splice(i, 1);
-      }
-      for (let i = rocks.length - 1; i >= 0; i--) {
-        if (rocks[i].y > bottomWorld + 600) rocks.splice(i, 1);
-      }
+      for (let i = moguls.length - 1; i >= 0; i--) if (moguls[i].y > bottomWorld + 600) moguls.splice(i, 1);
+      for (let i = rocks.length - 1; i >= 0; i--) if (rocks[i].y > bottomWorld + 600) rocks.splice(i, 1);
 
-      // Trick window expiration
-      if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) {
-        crash("No swipe");
-      }
+      if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) crash("No swipe");
 
-      // Collision checks (only if not crashed)
       if (game.state !== "crash") {
-        // Rocks cause immediate crash
         for (const rock of rocks) {
           const sy = worldToScreenY(rock.y);
           if (sy < -60 || sy > H() + 60) continue;
           const rr = (player.r + rock.r) * 0.95;
-          if (dist2(player.x, player.y, rock.x, sy) <= rr * rr) {
-            crash("Rock");
-            break;
-          }
+          if (dist2(player.x, player.y, rock.x, sy) <= rr * rr) { crash("Rock"); break; }
         }
 
-        // Mogul contact triggers a trick window once per mogul
         if (game.state !== "crash") {
           for (const m of moguls) {
             const sy = worldToScreenY(m.y);
@@ -430,7 +381,6 @@
         }
       }
 
-      // Trick animation
       if (player.airborne > 0) {
         player.airborne = Math.max(0, player.airborne - dt);
         player.spin += player.spinDir * dt * 10.5;
@@ -439,7 +389,6 @@
         player.spinDir = 0;
       }
 
-      // Snow particles
       for (let i = snowFX.length - 1; i >= 0; i--) {
         const p = snowFX[i];
         p.t += dt;
@@ -449,7 +398,6 @@
         if (p.t >= p.life) snowFX.splice(i, 1);
       }
 
-      // Crash animation
       if (game.state === "crash") {
         game.crashT += dt;
         if (game.crashT > 1.2) {
@@ -467,13 +415,8 @@
       game.trick.active = true;
       game.trick.resolved = false;
       game.trick.mogulId = mogulId;
-
-      // Random required direction per mogul (simple starter mechanic)
       game.trick.required = Math.random() < 0.5 ? "up" : "down";
-
-      // 450ms window feels snappy on mobile
       game.trick.until = performance.now() + 450;
-
       showToast(game.trick.required === "up" ? "Swipe up - backflip" : "Swipe down - frontflip");
     }
 
@@ -488,8 +431,6 @@
       const maxTime = 500;
 
       if (dist < minDist || dtMs > maxTime) return;
-
-      // Mostly vertical
       if (absY < absX * 1.2) return;
 
       const dir = dy < 0 ? "up" : "down";
@@ -505,7 +446,6 @@
         game.combo = Math.min(20, game.combo + 1);
         game.bestCombo = Math.max(game.bestCombo, game.combo);
 
-        // Animate trick
         player.airborne = 0.55;
         player.spinDir = (dir === "up") ? 1 : -1;
 
@@ -535,7 +475,87 @@
       showToast(msg);
     }
 
+    // Pixel-art helper (8-bit vibe)
+    function px(ctx, x, y, s, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x * s, y * s, s, s);
+    }
+
+    function drawSnowboarder8bit(ctx, crashed) {
+      // A tiny 8-bit snowboarder facing "downhill" (in local space before rotation)
+      // Local origin is (0,0) at the player's translate point.
+      // We draw centered around x ~ 0.
+      const s = 2.2; // pixel scale inside sprite (tweak)
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+
+      // Slight hop effect during airborne
+      const hop = (player.airborne > 0) ? -6 : 0;
+      ctx.translate(-8 * s, (-16 * s) + hop);
+
+      // Colors (simple NES-ish palette)
+      const OUT = "rgba(0,0,0,0.55)";
+      const HELM = crashed ? "rgba(255,120,150,0.95)" : "rgba(245,245,255,0.95)";
+      const FACE = "rgba(245,210,170,0.95)";
+      const JACKET = crashed ? "rgba(255,90,130,0.85)" : "rgba(90,200,255,0.9)";
+      const PANTS = "rgba(60,90,140,0.95)";
+      const GLOVE = "rgba(230,230,240,0.9)";
+      const BOARD = "rgba(255,255,255,0.9)";
+      const BOARD2 = "rgba(0,0,0,0.30)";
+
+      // Shadow (in sprite space)
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(4 * s, 20 * s, 8 * s, 3 * s);
+      ctx.globalAlpha = 1;
+
+      // Board (diagonal-ish slab)
+      // outline
+      for (let x = 2; x <= 13; x++) px(ctx, x, 18, s, OUT);
+      // top
+      px(ctx, 3, 17, s, OUT); px(ctx, 12, 17, s, OUT);
+      // base
+      for (let x = 3; x <= 12; x++) px(ctx, x, 18, s, BOARD);
+      for (let x = 4; x <= 11; x++) px(ctx, x, 19, s, BOARD2);
+
+      // Boots
+      px(ctx, 6, 17, s, OUT); px(ctx, 9, 17, s, OUT);
+      px(ctx, 6, 16, s, PANTS); px(ctx, 9, 16, s, PANTS);
+
+      // Legs / pants
+      px(ctx, 6, 15, s, PANTS); px(ctx, 7, 15, s, PANTS);
+      px(ctx, 8, 15, s, PANTS); px(ctx, 9, 15, s, PANTS);
+      px(ctx, 7, 14, s, PANTS); px(ctx, 8, 14, s, PANTS);
+
+      // Jacket body
+      px(ctx, 6, 12, s, JACKET); px(ctx, 7, 12, s, JACKET); px(ctx, 8, 12, s, JACKET); px(ctx, 9, 12, s, JACKET);
+      px(ctx, 6, 13, s, JACKET); px(ctx, 7, 13, s, JACKET); px(ctx, 8, 13, s, JACKET); px(ctx, 9, 13, s, JACKET);
+      px(ctx, 7, 11, s, JACKET); px(ctx, 8, 11, s, JACKET);
+
+      // Arms
+      px(ctx, 5, 12, s, JACKET); px(ctx, 10, 12, s, JACKET);
+      px(ctx, 4, 13, s, JACKET); px(ctx, 11, 13, s, JACKET);
+      px(ctx, 4, 14, s, GLOVE); px(ctx, 11, 14, s, GLOVE);
+
+      // Head
+      px(ctx, 7, 9, s, HELM); px(ctx, 8, 9, s, HELM);
+      px(ctx, 6, 10, s, HELM); px(ctx, 7, 10, s, HELM); px(ctx, 8, 10, s, HELM); px(ctx, 9, 10, s, HELM);
+      px(ctx, 7, 10, s, FACE); px(ctx, 8, 10, s, FACE);
+      // goggles line
+      px(ctx, 7, 10, s, "rgba(0,0,0,0.55)");
+      px(ctx, 8, 10, s, "rgba(0,0,0,0.55)");
+
+      // Tiny flair: board tip dots
+      px(ctx, 3, 18, s, "rgba(255,70,90,0.85)");
+      px(ctx, 12, 18, s, "rgba(90,180,255,0.85)");
+
+      ctx.restore();
+    }
+
     function draw() {
+      // Crisp pixels
+      ctx.imageSmoothingEnabled = false;
+
       // Background
       ctx.fillStyle = "#08122b";
       ctx.fillRect(0, 0, W(), H());
@@ -569,7 +589,6 @@
         ctx.beginPath();
         ctx.arc(0, 0, rock.r, 0, Math.PI * 2);
         ctx.fill();
-
         ctx.strokeStyle = "rgba(255,255,255,0.10)";
         ctx.lineWidth = 2;
         ctx.stroke();
@@ -615,50 +634,27 @@
       ctx.save();
       ctx.translate(player.x, player.y);
 
-      // Aim board toward direction vector (so pointing downhill is visible)
-      const aim = Math.atan2(player.dirY, player.dirX); // -PI..PI
+      // Aim board toward direction vector
+      const aim = Math.atan2(player.dirY, player.dirX);
       const rot = (aim - Math.PI / 2) + player.tilt * 0.35 + player.spin * 0.35;
       ctx.rotate(rot);
 
-      // Shadow
-      ctx.save();
-      ctx.rotate(-rot);
-      ctx.globalAlpha = 0.25;
-      ctx.fillStyle = "#000";
-      ctx.beginPath();
-      ctx.ellipse(0, 14, 18, 7, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Rider body
       const crashed = game.state === "crash";
-      ctx.fillStyle = crashed ? "rgba(255,80,120,0.85)" : "rgba(90,200,255,0.85)";
-      ctx.beginPath();
-      ctx.arc(0, 0, player.r, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Board
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.fillRect(-22, 14, 44, 6);
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(-22, 17, 44, 3);
-
-      // Face dot
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.beginPath();
-      ctx.arc(6, -4, 3, 0, Math.PI * 2);
-      ctx.fill();
 
       // Trick indicator ring during window
       if (game.trick.active && !crashed) {
         const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
         ctx.strokeStyle = game.trick.required === "up" ? "rgba(140,255,170,0.9)" : "rgba(255,200,120,0.9)";
         ctx.lineWidth = 3;
-        ctx.globalAlpha = 0.35 + 0.65 * tLeft;
+        ctx.globalAlpha = 0.25 + 0.55 * tLeft;
         ctx.beginPath();
-        ctx.arc(0, 0, player.r + 10, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
+        ctx.arc(0, 0, player.r + 12, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
+
+      // Draw 8-bit snowboarder
+      drawSnowboarder8bit(ctx, crashed);
 
       ctx.restore();
 
@@ -682,10 +678,8 @@
     function loop(now) {
       const dt = Math.min(0.033, (now - last) / 1000);
       last = now;
-
       update(dt);
       draw();
-
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
