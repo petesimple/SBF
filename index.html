@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no" />
+  <title>Snowboard Free (prototype)</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0b1020; overflow: hidden; }
+    canvas { display:block; width: 100vw; height: 100vh; touch-action: none; }
+    .hud {
+      position: fixed; left: 12px; top: 10px; right: 12px;
+      color: #eaf2ff; font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      text-shadow: 0 2px 8px rgba(0,0,0,.6);
+      display:flex; align-items:flex-start; justify-content:space-between; gap: 10px;
+      pointer-events:none;
+    }
+    .hud .left { display:flex; flex-direction:column; gap:6px; }
+    .badge {
+      display:inline-block; padding: 6px 10px; border-radius: 999px;
+      background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+      backdrop-filter: blur(6px);
+    }
+    .toast {
+      position: fixed; left: 50%; top: 18%;
+      transform: translateX(-50%);
+      padding: 10px 14px; border-radius: 14px;
+      background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
+      color: #fff; font: 16px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      text-shadow: 0 2px 10px rgba(0,0,0,.7);
+      pointer-events:none;
+      opacity: 0; transition: opacity .18s ease;
+      white-space: nowrap;
+    }
+    .toast.show { opacity: 1; }
+    .btn {
+      pointer-events:auto;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.10);
+      color:#fff; border-radius: 12px;
+      padding: 8px 12px;
+      font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      cursor: pointer;
+    }
+    .btn:active { transform: translateY(1px); }
+    .footerTip {
+      position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+      color: rgba(234,242,255,.92);
+      font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      padding: 8px 12px;
+      text-shadow: 0 2px 8px rgba(0,0,0,.6);
+      pointer-events:none;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div class="left">
+      <div class="badge" id="scoreBadge">Score: 0</div>
+      <div class="badge" id="comboBadge">Combo: x1</div>
+      <div class="badge" id="speedBadge">Speed: 1.0</div>
+    </div>
+    <button class="btn" id="restartBtn">Restart</button>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="footerTip">Drag to steer. Hit mogul then swipe up for backflip, down for frontflip.</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    // Snowboard Free - tiny prototype
+    // Single file, GitHub Pages friendly, mobile-first.
+
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d", { alpha: false });
+
+    const ui = {
+      score: document.getElementById("scoreBadge"),
+      combo: document.getElementById("comboBadge"),
+      speed: document.getElementById("speedBadge"),
+      toast: document.getElementById("toast"),
+      restart: document.getElementById("restartBtn"),
+    };
+
+    function fitCanvas() {
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", fitCanvas);
+    fitCanvas();
+
+    const W = () => window.innerWidth;
+    const H = () => window.innerHeight;
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    function rand(a, b) { return a + Math.random() * (b - a); }
+    function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; }
+
+    // Input state (touch or mouse)
+    const input = {
+      active: false,
+      x: W() * 0.5,
+      y: H() * 0.7,
+      lastX: null,
+      lastY: null,
+      swipeDX: 0,
+      swipeDY: 0,
+      swipeTime: 0,
+      swipeStartX: 0,
+      swipeStartY: 0,
+      swipeStartT: 0,
+      justSwiped: false,
+      lastPointerMoveT: 0,
+    };
+
+    function showToast(text) {
+      ui.toast.textContent = text;
+      ui.toast.classList.add("show");
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => ui.toast.classList.remove("show"), 650);
+    }
+
+    function pointerPos(e) {
+      if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      if (e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    function onPointerDown(e) {
+      e.preventDefault();
+      const p = pointerPos(e);
+      input.active = true;
+      input.x = p.x; input.y = p.y;
+      input.lastX = p.x; input.lastY = p.y;
+      input.swipeStartX = p.x; input.swipeStartY = p.y;
+      input.swipeStartT = performance.now();
+      input.justSwiped = false;
+    }
+
+    function onPointerMove(e) {
+      if (!input.active) return;
+      e.preventDefault();
+      const p = pointerPos(e);
+      input.x = p.x; input.y = p.y;
+      input.lastPointerMoveT = performance.now();
+    }
+
+    function onPointerUp(e) {
+      if (!input.active) return;
+      e.preventDefault();
+      const p = pointerPos(e);
+      input.active = false;
+
+      // Compute swipe vector from start to end
+      const tNow = performance.now();
+      const dt = Math.max(1, tNow - input.swipeStartT);
+      const dx = p.x - input.swipeStartX;
+      const dy = p.y - input.swipeStartY;
+
+      input.swipeDX = dx;
+      input.swipeDY = dy;
+      input.swipeTime = dt;
+      input.justSwiped = true;
+    }
+
+    // Touch and mouse
+    canvas.addEventListener("touchstart", onPointerDown, { passive: false });
+    canvas.addEventListener("touchmove", onPointerMove, { passive: false });
+    canvas.addEventListener("touchend", onPointerUp, { passive: false });
+
+    canvas.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("mousemove", onPointerMove);
+    window.addEventListener("mouseup", onPointerUp);
+
+    // Keyboard helpers for desktop
+    const keys = {};
+    window.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
+    window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+
+    // Game objects
+    const game = {
+      running: true,
+      time: 0,
+      scrollY: 0,
+      speed: 220, // pixels per second
+      speedMul: 1,
+      score: 0,
+      combo: 1,
+      bestCombo: 1,
+      state: "ride", // ride | trick | crash
+      crashT: 0,
+      // mogul trick window
+      trick: {
+        active: false,
+        until: 0,
+        mogulId: null,
+        required: null, // "up" | "down"
+        resolved: false,
+      }
+    };
+
+    const player = {
+      x: W() * 0.5,
+      y: H() * 0.70,
+      r: 14,
+      vx: 0,
+      tilt: 0,
+      spin: 0,
+      spinDir: 0,
+      airborne: 0,
+    };
+
+    let nextId = 1;
+    const moguls = [];
+    const rocks = [];
+    const snowFX = [];
+
+    function reset() {
+      game.running = true;
+      game.time = 0;
+      game.scrollY = 0;
+      game.speed = 220;
+      game.speedMul = 1;
+      game.score = 0;
+      game.combo = 1;
+      game.bestCombo = 1;
+      game.state = "ride";
+      game.crashT = 0;
+      game.trick.active = false;
+      game.trick.until = 0;
+      game.trick.mogulId = null;
+      game.trick.required = null;
+      game.trick.resolved = false;
+
+      player.x = W() * 0.5;
+      player.y = H() * 0.70;
+      player.vx = 0;
+      player.tilt = 0;
+      player.spin = 0;
+      player.spinDir = 0;
+      player.airborne = 0;
+
+      moguls.length = 0;
+      rocks.length = 0;
+      snowFX.length = 0;
+      input.justSwiped = false;
+
+      // Seed some objects
+      for (let i = 0; i < 10; i++) spawnMogul(-i * 220 - 200);
+      for (let i = 0; i < 6; i++) spawnRock(-i * 380 - 300);
+
+      showToast("Shred time");
+    }
+
+    function spawnMogul(worldY) {
+      moguls.push({
+        id: nextId++,
+        x: rand(60, W() - 60),
+        y: worldY,
+        r: rand(18, 26),
+        used: false
+      });
+    }
+
+    function spawnRock(worldY) {
+      rocks.push({
+        id: nextId++,
+        x: rand(50, W() - 50),
+        y: worldY,
+        r: rand(14, 22),
+      });
+    }
+
+    function addPowder(x, y, n = 10) {
+      for (let i = 0; i < n; i++) {
+        snowFX.push({
+          x: x + rand(-8, 8),
+          y: y + rand(-8, 8),
+          vx: rand(-40, 40),
+          vy: rand(-80, -20),
+          life: rand(0.25, 0.45),
+          t: 0,
+        });
+      }
+    }
+
+    ui.restart.addEventListener("click", reset);
+
+    reset();
+
+    function worldToScreenY(worldY) {
+      return worldY + game.scrollY;
+    }
+
+    function update(dt) {
+      if (!game.running) return;
+
+      game.time += dt;
+
+      // speed ramps slowly
+      game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
+      const scrollSpeed = game.speed * game.speedMul;
+      game.scrollY += scrollSpeed * dt;
+
+      // Move player toward finger/mouse x
+      let targetX = input.x;
+      if (!input.active) {
+        // mouse: keep last x, keyboard can nudge
+        targetX = clamp(player.x + (keys["arrowleft"] ? -240 * dt : 0) + (keys["arrowright"] ? 240 * dt : 0), 25, W() - 25);
+      }
+
+      // Follow with a bit of smoothing
+      const dx = targetX - player.x;
+      player.vx = dx * 10;
+      player.x += dx * clamp(dt * 8, 0, 1);
+      player.x = clamp(player.x, 25, W() - 25);
+
+      // Tilt for feel
+      player.tilt = clamp(player.vx / 700, -0.7, 0.7);
+
+      // If a swipe ended this frame, try to resolve trick
+      if (input.justSwiped) {
+        handleSwipe(input.swipeDX, input.swipeDY, input.swipeTime);
+        input.justSwiped = false;
+      }
+
+      // Maintain object pools: recycle when past screen
+      const topWorld = -game.scrollY - 120;      // far above screen in world space
+      const bottomWorld = -game.scrollY + H() + 260; // below screen in world space
+
+      // Spawn ahead as we scroll
+      while (moguls.length < 14) spawnMogul(topWorld - rand(120, 260));
+      while (rocks.length < 9) spawnRock(topWorld - rand(250, 520));
+
+      // Cull deep below
+      for (let i = moguls.length - 1; i >= 0; i--) {
+        if (moguls[i].y > bottomWorld + 600) moguls.splice(i, 1);
+      }
+      for (let i = rocks.length - 1; i >= 0; i--) {
+        if (rocks[i].y > bottomWorld + 600) rocks.splice(i, 1);
+      }
+
+      // Trick window expiration
+      if (game.trick.active && performance.now() > game.trick.until && !game.trick.resolved) {
+        crash("No swipe");
+      }
+
+      // Collision checks (only if not crashed)
+      if (game.state !== "crash") {
+        // Rocks cause immediate crash
+        for (const rock of rocks) {
+          const sy = worldToScreenY(rock.y);
+          if (sy < -60 || sy > H() + 60) continue;
+          const rr = (player.r + rock.r) * 0.95;
+          if (dist2(player.x, player.y, rock.x, sy) <= rr * rr) {
+            crash("Rock");
+            break;
+          }
+        }
+
+        // Mogul contact triggers a trick window once per mogul
+        if (game.state !== "crash") {
+          for (const m of moguls) {
+            const sy = worldToScreenY(m.y);
+            if (sy < -80 || sy > H() + 80) continue;
+            const rr = (player.r + m.r) * 0.95;
+            if (!m.used && dist2(player.x, player.y, m.x, sy) <= rr * rr) {
+              m.used = true;
+              beginTrickWindow(m.id);
+              addPowder(player.x, player.y + 8, 12);
+              break;
+            }
+          }
+        }
+      }
+
+      // Trick animation
+      if (player.airborne > 0) {
+        player.airborne = Math.max(0, player.airborne - dt);
+        player.spin += player.spinDir * dt * 10.5; // radians-ish
+      } else {
+        player.spin = 0;
+        player.spinDir = 0;
+      }
+
+      // Snow particles
+      for (let i = snowFX.length - 1; i >= 0; i--) {
+        const p = snowFX[i];
+        p.t += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 260 * dt;
+        if (p.t >= p.life) snowFX.splice(i, 1);
+      }
+
+      // Crash animation
+      if (game.state === "crash") {
+        game.crashT += dt;
+        if (game.crashT > 1.2) {
+          game.running = false;
+          showToast("Wipeout - tap Restart");
+        }
+      }
+
+      ui.score.textContent = `Score: ${Math.floor(game.score)}`;
+      ui.combo.textContent = `Combo: x${game.combo}`;
+      ui.speed.textContent = `Speed: ${(game.speedMul).toFixed(1)}`;
+    }
+
+    function beginTrickWindow(mogulId) {
+      // If already in a window and it wasn't resolved, you probably hit another mogul too fast.
+      // Keep it simple: refresh the window and require a random direction, later you can vary by mogul type.
+      game.trick.active = true;
+      game.trick.resolved = false;
+      game.trick.mogulId = mogulId;
+
+      // For now: random required direction each mogul
+      game.trick.required = Math.random() < 0.5 ? "up" : "down";
+
+      // 450ms window feels snappy on mobile
+      game.trick.until = performance.now() + 450;
+
+      showToast(game.trick.required === "up" ? "Swipe up - backflip" : "Swipe down - frontflip");
+    }
+
+    function handleSwipe(dx, dy, dtMs) {
+      if (!game.trick.active || game.trick.resolved) return;
+
+      // Basic swipe detection:
+      // - minimum distance
+      // - mostly vertical
+      // - fast enough
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      const dist = Math.hypot(dx, dy);
+
+      const minDist = 40;
+      const maxTime = 500;
+
+      if (dist < minDist || dtMs > maxTime) return;
+
+      // must be mostly vertical
+      if (absY < absX * 1.2) return;
+
+      const dir = dy < 0 ? "up" : "down";
+      const needed = game.trick.required;
+
+      if (dir === needed) {
+        // Success
+        game.trick.resolved = true;
+        game.trick.active = false;
+
+        const base = 100;
+        const bonus = (game.combo - 1) * 35;
+        game.score += base + bonus;
+        game.combo = Math.min(20, game.combo + 1);
+        game.bestCombo = Math.max(game.bestCombo, game.combo);
+
+        // Animate trick
+        player.airborne = 0.55;
+        player.spinDir = (dir === "up") ? 1 : -1;
+
+        addPowder(player.x, player.y + 10, 18);
+        showToast(dir === "up" ? "Backflip" : "Frontflip");
+      } else {
+        crash("Wrong flip");
+      }
+    }
+
+    function crash(reason) {
+      if (game.state === "crash") return;
+      game.state = "crash";
+      game.crashT = 0;
+      game.trick.active = false;
+      game.trick.resolved = true;
+      game.combo = 1;
+
+      addPowder(player.x, player.y, 28);
+
+      const msg = reason === "Rock" ? "Rocked" :
+                  reason === "Wrong flip" ? "Wrong flip" :
+                  reason === "No swipe" ? "No swipe" :
+                  "Wipeout";
+
+      showToast(msg);
+    }
+
+    function draw() {
+      // Background
+      ctx.fillStyle = "#08122b";
+      ctx.fillRect(0, 0, W(), H());
+
+      // Snow field gradient-ish banding
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      for (let i = 0; i < 8; i++) {
+        const y = (i / 8) * H();
+        ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.025)";
+        ctx.fillRect(0, y, W(), H() / 8);
+      }
+      ctx.restore();
+
+      // "Slope" edges
+      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(18, 0); ctx.lineTo(18, H());
+      ctx.moveTo(W() - 18, 0); ctx.lineTo(W() - 18, H());
+      ctx.stroke();
+
+      // Draw rocks
+      for (const rock of rocks) {
+        const sy = worldToScreenY(rock.y);
+        if (sy < -80 || sy > H() + 80) continue;
+
+        ctx.save();
+        ctx.translate(rock.x, sy);
+        ctx.fillStyle = "rgba(20,25,35,0.9)";
+        ctx.beginPath();
+        ctx.arc(0, 0, rock.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255,255,255,0.10)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw moguls
+      for (const m of moguls) {
+        const sy = worldToScreenY(m.y);
+        if (sy < -100 || sy > H() + 100) continue;
+
+        ctx.save();
+        ctx.translate(m.x, sy);
+
+        // base bump
+        ctx.fillStyle = "rgba(255,255,255,0.12)";
+        ctx.beginPath();
+        ctx.arc(0, 0, m.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // highlight
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.beginPath();
+        ctx.arc(-m.r * 0.25, -m.r * 0.25, m.r * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+
+        // if used, dim
+        if (m.used) {
+          ctx.fillStyle = "rgba(0,0,0,0.12)";
+          ctx.beginPath();
+          ctx.arc(0, 0, m.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // Snow particles
+      for (const p of snowFX) {
+        const a = 1 - (p.t / p.life);
+        ctx.fillStyle = `rgba(255,255,255,${0.7 * a})`;
+        ctx.fillRect(p.x, p.y, 2, 2);
+      }
+
+      // Player
+      ctx.save();
+      ctx.translate(player.x, player.y);
+
+      // Trick spin + tilt
+      const rot = player.tilt + player.spin * 0.35;
+      ctx.rotate(rot);
+
+      // Shadow
+      ctx.save();
+      ctx.rotate(-rot);
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.ellipse(0, 14, 18, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Rider body (simple)
+      const crashed = game.state === "crash";
+      ctx.fillStyle = crashed ? "rgba(255,80,120,0.85)" : "rgba(90,200,255,0.85)";
+      ctx.beginPath();
+      ctx.arc(0, 0, player.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Board
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillRect(-22, 14, 44, 6);
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(-22, 17, 44, 3);
+
+      // Face dot
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.arc(6, -4, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Trick indicator ring during window
+      if (game.trick.active && !crashed) {
+        const tLeft = Math.max(0, (game.trick.until - performance.now()) / 450);
+        ctx.strokeStyle = game.trick.required === "up" ? "rgba(140,255,170,0.9)" : "rgba(255,200,120,0.9)";
+        ctx.lineWidth = 3;
+        ctx.globalAlpha = 0.35 + 0.65 * tLeft;
+        ctx.beginPath();
+        ctx.arc(0, 0, player.r + 10, -Math.PI/2, -Math.PI/2 + Math.PI*2*tLeft);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+
+      // If game over, overlay
+      if (!game.running) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(0, 0, W(), H());
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.font = "700 30px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("Snowboard Free", W() * 0.5, H() * 0.40);
+        ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText(`Score: ${Math.floor(game.score)}   Best combo: x${game.bestCombo}`, W() * 0.5, H() * 0.46);
+        ctx.fillText("Press Restart to shred again", W() * 0.5, H() * 0.52);
+        ctx.restore();
+      }
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
