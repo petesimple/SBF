@@ -52,6 +52,7 @@
       padding: 8px 12px;
       text-shadow: 0 2px 8px rgba(0,0,0,.6);
       pointer-events:none;
+      text-align: center;
     }
   </style>
 </head>
@@ -60,17 +61,18 @@
     <div class="left">
       <div class="badge" id="scoreBadge">Score: 0</div>
       <div class="badge" id="comboBadge">Combo: x1</div>
-      <div class="badge" id="speedBadge">Speed: 1.0</div>
+      <div class="badge" id="speedBadge">Speed: 0.0</div>
     </div>
     <button class="btn" id="restartBtn">Restart</button>
   </div>
   <div class="toast" id="toast"></div>
-  <div class="footerTip">Drag to steer. Hit mogul then swipe up for backflip, down for frontflip.</div>
+  <div class="footerTip">Drag to steer. You only move downhill when your board points downhill. Hit mogul then swipe up for backflip, down for frontflip.</div>
   <canvas id="c"></canvas>
 
   <script>
     // Snowboard Free - tiny prototype
     // Single file, GitHub Pages friendly, mobile-first.
+    // Change: downhill scrolling only happens when board points downhill.
 
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -185,7 +187,7 @@
       running: true,
       time: 0,
       scrollY: 0,
-      speed: 220, // pixels per second
+      speed: 220, // base pixels per second (before gating)
       speedMul: 1,
       score: 0,
       combo: 1,
@@ -197,7 +199,7 @@
         active: false,
         until: 0,
         mogulId: null,
-        required: null, // "up" | "down"
+        required: null, // up | down
         resolved: false,
       }
     };
@@ -211,6 +213,12 @@
       spin: 0,
       spinDir: 0,
       airborne: 0,
+
+      // board pointing direction (normalized)
+      dirX: 0,
+      dirY: 1,
+      lastDirX: 0,
+      lastDirY: 1,
     };
 
     let nextId = 1;
@@ -242,6 +250,11 @@
       player.spin = 0;
       player.spinDir = 0;
       player.airborne = 0;
+
+      player.dirX = 0;
+      player.dirY = 1;
+      player.lastDirX = 0;
+      player.lastDirY = 1;
 
       moguls.length = 0;
       rocks.length = 0;
@@ -288,7 +301,6 @@
     }
 
     ui.restart.addEventListener("click", reset);
-
     reset();
 
     function worldToScreenY(worldY) {
@@ -300,26 +312,69 @@
 
       game.time += dt;
 
-      // speed ramps slowly
-      game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
-      const scrollSpeed = game.speed * game.speedMul;
-      game.scrollY += scrollSpeed * dt;
-
-      // Move player toward finger/mouse x
+      // Determine where the player wants to go
       let targetX = input.x;
       if (!input.active) {
         // mouse: keep last x, keyboard can nudge
-        targetX = clamp(player.x + (keys["arrowleft"] ? -240 * dt : 0) + (keys["arrowright"] ? 240 * dt : 0), 25, W() - 25);
+        targetX = clamp(
+          player.x
+          + (keys["arrowleft"] ? -240 * dt : 0)
+          + (keys["arrowright"] ? 240 * dt : 0),
+          25,
+          W() - 25
+        );
       }
 
-      // Follow with a bit of smoothing
+      // Follow with smoothing
       const dx = targetX - player.x;
       player.vx = dx * 10;
       player.x += dx * clamp(dt * 8, 0, 1);
       player.x = clamp(player.x, 25, W() - 25);
 
-      // Tilt for feel
+      // Tilt feel
       player.tilt = clamp(player.vx / 700, -0.7, 0.7);
+
+      // Speed ramps slowly (this is the potential speed, then we gate it)
+      game.speedMul = 1 + Math.min(1.2, game.time / 45) * 0.8;
+
+      // Compute board direction (normalized)
+      // If finger is down: point board toward finger
+      // If finger is up: point based on motion, with some downhill intent
+      let dirX = 0;
+      let dirY = 1;
+
+      if (input.active) {
+        const vx = (input.x - player.x);
+        const vy = (input.y - player.y);
+        const len = Math.hypot(vx, vy) || 1;
+        dirX = vx / len;
+        dirY = vy / len;
+      } else {
+        const vx = player.vx;
+        const vy = 180; // downhill intent when not touching
+        const len = Math.hypot(vx, vy) || 1;
+        dirX = vx / len;
+        dirY = vy / len;
+      }
+
+      player.dirX = dirX;
+      player.dirY = dirY;
+      player.lastDirX = dirX;
+      player.lastDirY = dirY;
+
+      // Gate downhill scrolling by how "downhill" the board is pointed.
+      // dirY ranges -1..+1 (uphill..downhill).
+      const downhillAlign = dirY;
+      const THRESH = 0.25; // tune: 0.1 easy, 0.35 stricter
+
+      let moveFactor = 0;
+      if (downhillAlign > THRESH) {
+        moveFactor = (downhillAlign - THRESH) / (1 - THRESH);
+        moveFactor = moveFactor * moveFactor; // ease-in
+      }
+
+      const scrollSpeed = game.speed * game.speedMul * moveFactor;
+      game.scrollY += scrollSpeed * dt;
 
       // If a swipe ended this frame, try to resolve trick
       if (input.justSwiped) {
@@ -328,14 +383,12 @@
       }
 
       // Maintain object pools: recycle when past screen
-      const topWorld = -game.scrollY - 120;      // far above screen in world space
-      const bottomWorld = -game.scrollY + H() + 260; // below screen in world space
+      const topWorld = -game.scrollY - 120;               // above screen in world space
+      const bottomWorld = -game.scrollY + H() + 260;      // below screen in world space
 
-      // Spawn ahead as we scroll
       while (moguls.length < 14) spawnMogul(topWorld - rand(120, 260));
       while (rocks.length < 9) spawnRock(topWorld - rand(250, 520));
 
-      // Cull deep below
       for (let i = moguls.length - 1; i >= 0; i--) {
         if (moguls[i].y > bottomWorld + 600) moguls.splice(i, 1);
       }
@@ -380,7 +433,7 @@
       // Trick animation
       if (player.airborne > 0) {
         player.airborne = Math.max(0, player.airborne - dt);
-        player.spin += player.spinDir * dt * 10.5; // radians-ish
+        player.spin += player.spinDir * dt * 10.5;
       } else {
         player.spin = 0;
         player.spinDir = 0;
@@ -407,17 +460,15 @@
 
       ui.score.textContent = `Score: ${Math.floor(game.score)}`;
       ui.combo.textContent = `Combo: x${game.combo}`;
-      ui.speed.textContent = `Speed: ${(game.speedMul).toFixed(1)}`;
+      ui.speed.textContent = `Speed: ${(game.speedMul * moveFactor).toFixed(1)}`;
     }
 
     function beginTrickWindow(mogulId) {
-      // If already in a window and it wasn't resolved, you probably hit another mogul too fast.
-      // Keep it simple: refresh the window and require a random direction, later you can vary by mogul type.
       game.trick.active = true;
       game.trick.resolved = false;
       game.trick.mogulId = mogulId;
 
-      // For now: random required direction each mogul
+      // Random required direction per mogul (simple starter mechanic)
       game.trick.required = Math.random() < 0.5 ? "up" : "down";
 
       // 450ms window feels snappy on mobile
@@ -429,10 +480,6 @@
     function handleSwipe(dx, dy, dtMs) {
       if (!game.trick.active || game.trick.resolved) return;
 
-      // Basic swipe detection:
-      // - minimum distance
-      // - mostly vertical
-      // - fast enough
       const absX = Math.abs(dx);
       const absY = Math.abs(dy);
       const dist = Math.hypot(dx, dy);
@@ -442,14 +489,13 @@
 
       if (dist < minDist || dtMs > maxTime) return;
 
-      // must be mostly vertical
+      // Mostly vertical
       if (absY < absX * 1.2) return;
 
       const dir = dy < 0 ? "up" : "down";
       const needed = game.trick.required;
 
       if (dir === needed) {
-        // Success
         game.trick.resolved = true;
         game.trick.active = false;
 
@@ -480,10 +526,11 @@
 
       addPowder(player.x, player.y, 28);
 
-      const msg = reason === "Rock" ? "Rocked" :
-                  reason === "Wrong flip" ? "Wrong flip" :
-                  reason === "No swipe" ? "No swipe" :
-                  "Wipeout";
+      const msg =
+        reason === "Rock" ? "Rocked" :
+        reason === "Wrong flip" ? "Wrong flip" :
+        reason === "No swipe" ? "No swipe" :
+        "Wipeout";
 
       showToast(msg);
     }
@@ -493,7 +540,7 @@
       ctx.fillStyle = "#08122b";
       ctx.fillRect(0, 0, W(), H());
 
-      // Snow field gradient-ish banding
+      // Snow field bands
       ctx.save();
       ctx.globalAlpha = 0.9;
       for (let i = 0; i < 8; i++) {
@@ -503,7 +550,7 @@
       }
       ctx.restore();
 
-      // "Slope" edges
+      // Slope edges
       ctx.strokeStyle = "rgba(255,255,255,0.10)";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -511,7 +558,7 @@
       ctx.moveTo(W() - 18, 0); ctx.lineTo(W() - 18, H());
       ctx.stroke();
 
-      // Draw rocks
+      // Rocks
       for (const rock of rocks) {
         const sy = worldToScreenY(rock.y);
         if (sy < -80 || sy > H() + 80) continue;
@@ -529,7 +576,7 @@
         ctx.restore();
       }
 
-      // Draw moguls
+      // Moguls
       for (const m of moguls) {
         const sy = worldToScreenY(m.y);
         if (sy < -100 || sy > H() + 100) continue;
@@ -537,19 +584,16 @@
         ctx.save();
         ctx.translate(m.x, sy);
 
-        // base bump
         ctx.fillStyle = "rgba(255,255,255,0.12)";
         ctx.beginPath();
         ctx.arc(0, 0, m.r, 0, Math.PI * 2);
         ctx.fill();
 
-        // highlight
         ctx.fillStyle = "rgba(255,255,255,0.10)";
         ctx.beginPath();
         ctx.arc(-m.r * 0.25, -m.r * 0.25, m.r * 0.55, 0, Math.PI * 2);
         ctx.fill();
 
-        // if used, dim
         if (m.used) {
           ctx.fillStyle = "rgba(0,0,0,0.12)";
           ctx.beginPath();
@@ -560,7 +604,7 @@
         ctx.restore();
       }
 
-      // Snow particles
+      // Powder particles
       for (const p of snowFX) {
         const a = 1 - (p.t / p.life);
         ctx.fillStyle = `rgba(255,255,255,${0.7 * a})`;
@@ -571,8 +615,9 @@
       ctx.save();
       ctx.translate(player.x, player.y);
 
-      // Trick spin + tilt
-      const rot = player.tilt + player.spin * 0.35;
+      // Aim board toward direction vector (so pointing downhill is visible)
+      const aim = Math.atan2(player.dirY, player.dirX); // -PI..PI
+      const rot = (aim - Math.PI / 2) + player.tilt * 0.35 + player.spin * 0.35;
       ctx.rotate(rot);
 
       // Shadow
@@ -585,7 +630,7 @@
       ctx.fill();
       ctx.restore();
 
-      // Rider body (simple)
+      // Rider body
       const crashed = game.state === "crash";
       ctx.fillStyle = crashed ? "rgba(255,80,120,0.85)" : "rgba(90,200,255,0.85)";
       ctx.beginPath();
@@ -617,7 +662,7 @@
 
       ctx.restore();
 
-      // If game over, overlay
+      // Game over overlay
       if (!game.running) {
         ctx.save();
         ctx.fillStyle = "rgba(0,0,0,0.45)";
