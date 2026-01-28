@@ -3,6 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no" />
+  <link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#ffffff" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <title>Snowboard Free</title>
   <style>
     html, body { height: 100%; margin: 0; background: #ffffff; overflow: hidden; }
@@ -1090,6 +1095,13 @@
   requestAnimationFrame(loop);
 
 })();
+</script>
+  <script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
